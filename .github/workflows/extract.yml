@@ -1,0 +1,53 @@
+name: 本日発売コミック抽出
+
+on:
+  schedule:
+    - cron: '0 21 * * *' # 06:00 JST (UTC+9)
+    - cron: '0 9 * * *' # 18:00 JST
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '0600 か 1800 (空なら実行時刻から自動判定)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extract
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Tokyo # 朝/夕の判定と日付をJSTで行う
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 依存インストール
+        run: npm ci || npm install
+
+      - name: Chromium 準備
+        run: npx playwright install --with-deps chromium
+
+      - name: 抽出実行
+        run: node src/daily.js ${{ github.event.inputs.tag }}
+
+      - name: 結果をコミット
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add results snapshots
+          if git diff --cached --quiet; then
+            echo "変更なし"
+          else
+            git commit -m "auto: $(date '+%F %H:%M') 抽出結果"
+            git pull --rebase --autostash || true
+            git push
+          fi

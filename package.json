@@ -1,0 +1,15 @@
+{
+  "name": "amazon-rank-extractor",
+  "version": "1.0.0",
+  "description": "Amazon売れ筋ランキング 201〜1000位の書籍情報抽出ツール",
+  "type": "module",
+  "bin": {
+    "amazon-rank": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  }
+}
