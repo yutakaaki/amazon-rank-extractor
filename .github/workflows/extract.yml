@@ -1,11 +1,8 @@
 name: 本日発売コミック抽出
 
 on:
-  schedule:
-    # cronはUTC。GitHubのスケジュールは毎時0分が最も混雑し遅延/スキップされやすいため、
-    # 0分を避けて少しずらしている(GitHub側の都合で多少前後する点は仕様)。
-    - cron: '12 21 * * *' # 06:12 JST 付近 (UTC 21:12)
-    - cron: '12 9 * * *' # 18:12 JST 付近 (UTC 09:12)
+  # 定期実行は信頼性の高い「自宅Mac(launchd)」が担う。
+  # GitHub側のcronは遅延/スキップが多いため使わず、手動トリガーのみ残す(クラウド予備)。
   workflow_dispatch:
     inputs:
       tag:

@@ -10,7 +10,7 @@
 //   snapshots/コミック_YYYYMMDD_HHMM.json … 突き合わせ用(asin・順位を含む)
 //   results/コミック_発売日YYYYMMDD_HHMM.csv … その回の一覧
 //   results/コミック_発売日YYYYMMDD_朝夜比較.csv … 朝→夕のランク変化(夕の回で生成)
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 const SNAP_DIR = join(ROOT, 'snapshots');
 const RESULTS_DIR = join(ROOT, 'results');
+const DOCS_DIR = join(ROOT, 'docs'); // GitHub Pages 公開用
+
+const DIGEST_DAYS = 30; // ダイジェストに残す日数
 
 const GENRE = 'コミック'; // 自動実行の対象ジャンル
 const MORNING = '0600';
@@ -111,23 +114,26 @@ async function main() {
     }
   }
 
-  // 翌日以降の自動起床を再設定(任意・失敗しても致命的ではない)
+  // GitHub Pages 用ダイジェスト(docs/data.json)を全スナップショットから再生成
+  buildDigest();
+
+  // 結果・ダイジェストを GitHub に push(iPadからどこでも閲覧できるように)
+  pushResults(`${date} ${tag} 抽出`);
+
+  // 翌回の自動起床を再設定(任意・失敗しても致命的ではない)
   rearmWake(tag);
 }
 
-// 朝→夕のランク変化を比較してCSV出力。ランクが両方とれた書籍のみ対象。
-export function buildComparison(morningPath, eveningRecords, date, stamp) {
-  const morning = JSON.parse(readFileSync(morningPath, 'utf8')).records;
-  const mMap = new Map(morning.filter((r) => r.asin).map((r) => [r.asin, r]));
-
+// 朝→夕のランク変化を比較する純粋関数。ランクが両方とれた書籍のみ対象。
+// 18時順位が良い順に並べた行配列を返す。
+export function compareRows(morningRecords, eveningRecords, date) {
+  const mMap = new Map(morningRecords.filter((r) => r.asin).map((r) => [r.asin, r]));
   const rows = [];
   for (const ev of eveningRecords) {
     if (!ev.asin) continue;
     const mo = mMap.get(ev.asin);
     if (!mo) continue;
-    // ランキングが取れない書籍は無視
-    if (mo.rank == null || ev.rank == null) continue;
-
+    if (mo.rank == null || ev.rank == null) continue; // ランキング無しは無視
     const diff = mo.rank - ev.rank; // 正=順位が上がった(数字が小さくなった)
     const pct = Math.round((diff / mo.rank) * 1000) / 10; // 上昇率(%)、小数1桁
     rows.push({
@@ -136,13 +142,18 @@ export function buildComparison(morningPath, eveningRecords, date, stamp) {
       発売日: date,
       '6時順位': mo.rank,
       '18時順位': ev.rank,
-      順位変化: (diff > 0 ? '+' : '') + diff, // +は上昇
+      順位変化: (diff > 0 ? '+' : '') + diff,
       'ランク上昇率(%)': pct,
     });
   }
-  // 夕方(18時)の順位が良い順に並べる(上位ほど先頭)
   rows.sort((a, b) => a['18時順位'] - b['18時順位']);
+  return rows;
+}
 
+// 朝→夕の比較CSVを出力。
+export function buildComparison(morningPath, eveningRecords, date, stamp) {
+  const morning = JSON.parse(readFileSync(morningPath, 'utf8')).records;
+  const rows = compareRows(morning, eveningRecords, date);
   const outPath = join(RESULTS_DIR, `${GENRE}_発売日${stamp}_朝夜比較.csv`);
   writeCsv(
     outPath,
@@ -151,6 +162,77 @@ export function buildComparison(morningPath, eveningRecords, date, stamp) {
   );
   console.log(`[daily] 朝→夕 比較を出力: ${outPath} (${rows.length}件)`);
   return outPath;
+}
+
+// 全スナップショットから日別ダイジェスト(docs/data.json)を再生成する。
+// Pages の閲覧ページ(docs/index.html)がこれを読んで表示する。
+export function buildDigest() {
+  mkdirSync(DOCS_DIR, { recursive: true });
+  const files = existsSync(SNAP_DIR) ? readdirSync(SNAP_DIR).filter((f) => f.endsWith('.json')) : [];
+  // 日付ごとに朝/夕レコードをまとめる
+  const byDate = new Map(); // 'YYYY-MM-DD' -> { morning, evening }
+  for (const f of files) {
+    const m = f.match(/_(\d{8})_(\d{4})\.json$/);
+    if (!m) continue;
+    const date = `${m[1].slice(0, 4)}-${m[1].slice(4, 6)}-${m[1].slice(6, 8)}`;
+    let snap;
+    try {
+      snap = JSON.parse(readFileSync(join(SNAP_DIR, f), 'utf8'));
+    } catch {
+      continue;
+    }
+    const entry = byDate.get(date) || {};
+    if (m[2] === MORNING) entry.morning = snap.records;
+    else if (m[2] === EVENING) entry.evening = snap.records;
+    byDate.set(date, entry);
+  }
+
+  const days = [...byDate.entries()]
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1)) // 新しい日付が先頭
+    .slice(0, DIGEST_DAYS)
+    .map(([date, e]) => {
+      const morning = e.morning || [];
+      const evening = e.evening || [];
+      const comparison =
+        morning.length && evening.length ? compareRows(morning, evening, date) : [];
+      return {
+        date,
+        morningCount: morning.filter((r) => r.rank != null).length,
+        eveningCount: evening.filter((r) => r.rank != null).length,
+        hasComparison: comparison.length > 0,
+        comparison,
+      };
+    });
+
+  const digest = { genre: GENRE, generatedAt: new Date().toISOString(), days };
+  writeFileSync(join(DOCS_DIR, 'data.json'), JSON.stringify(digest), 'utf8');
+  console.log(`[daily] ダイジェスト更新: docs/data.json (${days.length}日分)`);
+}
+
+// results / snapshots / docs を GitHub に push。
+// git 未設定・リモート無し・認証失敗でもエラーで止めない(ローカル運用は継続)。
+function pushResults(message) {
+  try {
+    const git = (args) => execFileSync('git', args, { cwd: ROOT, stdio: 'pipe' });
+    git(['add', 'results', 'snapshots', 'docs']);
+    try {
+      git(['diff', '--cached', '--quiet']);
+      console.log('[daily] 変更なし(push省略)');
+      return; // 差分なし
+    } catch {
+      // 差分あり → commit
+    }
+    git(['-c', 'user.name=amazon-rank-bot', '-c', 'user.email=bot@local', 'commit', '-m', `auto: ${message}`]);
+    try {
+      git(['pull', '--rebase', '--autostash', 'origin', 'main']);
+    } catch {
+      /* 競合時もpushを試みる */
+    }
+    git(['push', 'origin', 'main']);
+    console.log('[daily] GitHub へ push 完了');
+  } catch (e) {
+    console.warn('[daily] push に失敗(ローカルには保存済み): ' + (e.message || e));
+  }
 }
 
 // 1日2回のスリープ自動起床を維持するための再設定。

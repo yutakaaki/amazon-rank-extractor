@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>コミック発売日 ランク変化ダイジェスト</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 16px;
+         max-width: 980px; margin: 0 auto; line-height: 1.5; }
+  h1 { font-size: 1.25rem; }
+  .muted { opacity: .65; font-size: 13px; }
+  select { font-size: 16px; padding: 8px; border-radius: 8px; border: 1px solid #999; }
+  .summary { margin: 10px 0; font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin-top: 8px; }
+  th, td { border-bottom: 1px solid rgba(127,127,127,.25); padding: 7px 8px; text-align: left; white-space: nowrap; }
+  th { position: sticky; top: 0; background: Canvas; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.title { white-space: normal; min-width: 14em; }
+  .up { color: #16a34a; font-weight: 700; }
+  .down { color: #dc2626; font-weight: 700; }
+  tr.top20 td:first-child::before { content: "★ "; color: #f59e0b; }
+  .wrap { overflow-x: auto; }
+  .pill { display:inline-block; background: rgba(127,127,127,.15); border-radius: 999px; padding: 2px 10px; margin-right:6px; font-size:12px; }
+</style>
+</head>
+<body>
+<h1>📈 コミック発売日 ランク変化ダイジェスト</h1>
+<p class="muted">各発売日について、<b>6時（予約規模）→18時（＋当日購入）</b>のランキング変化です。
+★は18時時点の上位20件。プラスの上昇率ほど発売日に多く買われた指標。</p>
+
+<div>
+  <label>発売日： <select id="day"></select></label>
+  <span id="updated" class="muted"></span>
+</div>
+<div class="summary" id="summary"></div>
+<div class="wrap"><table id="tbl"></table></div>
+<p class="muted" id="empty" style="display:none"></p>
+
+<script>
+const fmtPct = (p) => (p > 0 ? '+' : '') + p + '%';
+let DATA = null;
+
+async function load() {
+  try {
+    const res = await fetch('./data.json?_=' + Date.now());
+    DATA = await res.json();
+  } catch (e) {
+    document.getElementById('summary').textContent = 'データを読み込めませんでした。';
+    return;
+  }
+  document.getElementById('updated').textContent =
+    '更新: ' + new Date(DATA.generatedAt).toLocaleString('ja-JP');
+  const sel = document.getElementById('day');
+  sel.innerHTML = DATA.days
+    .map((d) => `<option value="${d.date}">${d.date}${d.hasComparison ? '' : '（朝のみ）'}</option>`)
+    .join('');
+  sel.onchange = () => render(sel.value);
+  if (DATA.days.length) render(DATA.days[0].date);
+  else document.getElementById('summary').textContent = 'まだデータがありません。';
+}
+
+function render(date) {
+  const d = DATA.days.find((x) => x.date === date);
+  const tbl = document.getElementById('tbl');
+  const empty = document.getElementById('empty');
+  document.getElementById('summary').innerHTML =
+    `<span class="pill">6時 ランク有 ${d.morningCount}件</span>` +
+    `<span class="pill">18時 ランク有 ${d.eveningCount}件</span>` +
+    `<span class="pill">比較対象 ${d.comparison.length}件</span>`;
+
+  if (!d.comparison.length) {
+    tbl.innerHTML = '';
+    empty.style.display = '';
+    empty.textContent = d.eveningCount
+      ? 'この日はまだ比較できません（朝・夕の両方が揃うと表示されます）。'
+      : 'この日は18時の集計がまだありません。';
+    return;
+  }
+  empty.style.display = 'none';
+  const head =
+    '<tr><th>タイトル</th><th>巻</th><th class="num">6時</th><th class="num">18時</th>' +
+    '<th class="num">変化</th><th class="num">上昇率</th></tr>';
+  const rows = d.comparison
+    .map((r, i) => {
+      const pct = r['ランク上昇率(%)'];
+      const cls = pct >= 0 ? 'up' : 'down';
+      return (
+        `<tr class="${i < 20 ? 'top20' : ''}">` +
+        `<td class="title">${esc(r['タイトル'])}</td>` +
+        `<td class="num">${r['巻数'] ?? ''}</td>` +
+        `<td class="num">${r['6時順位']}</td>` +
+        `<td class="num">${r['18時順位']}</td>` +
+        `<td class="num">${esc(String(r['順位変化']))}</td>` +
+        `<td class="num ${cls}">${fmtPct(pct)}</td></tr>`
+      );
+    })
+    .join('');
+  tbl.innerHTML = head + rows;
+}
+function esc(s) { return (s || '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+load();
+</script>
+</body>
+</html>
