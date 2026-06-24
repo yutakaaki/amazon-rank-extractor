@@ -164,6 +164,13 @@ export function buildComparison(morningPath, eveningRecords, date, stamp) {
   return outPath;
 }
 
+// レコード配列を表示用リスト(順位順・圏外は末尾)に変換。
+function toList(records) {
+  return [...records]
+    .sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity))
+    .map((r) => ({ 順位: r.rank ?? '—', タイトル: r.title, 巻数: r.volume ?? '' }));
+}
+
 // 全スナップショットから日別ダイジェスト(docs/data.json)を再生成する。
 // Pages の閲覧ページ(docs/index.html)がこれを読んで表示する。
 export function buildDigest() {
@@ -201,6 +208,8 @@ export function buildDigest() {
         eveningCount: evening.filter((r) => r.rank != null).length,
         hasComparison: comparison.length > 0,
         comparison,
+        morningList: toList(morning),
+        eveningList: toList(evening),
       };
     });
 

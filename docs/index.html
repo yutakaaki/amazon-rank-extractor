@@ -22,6 +22,10 @@
   tr.top20 td:first-child::before { content: "★ "; color: #f59e0b; }
   .wrap { overflow-x: auto; }
   .pill { display:inline-block; background: rgba(127,127,127,.15); border-radius: 999px; padding: 2px 10px; margin-right:6px; font-size:12px; }
+  .seg { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+  .seg button { font-size: 14px; padding: 7px 14px; border-radius: 8px; border: 1px solid rgba(127,127,127,.4); background: transparent; color: inherit; cursor: pointer; }
+  .seg button.on { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .seg button:disabled { opacity: .4; cursor: default; }
 </style>
 </head>
 <body>
@@ -34,6 +38,7 @@
   <span id="updated" class="muted"></span>
 </div>
 <div class="summary" id="summary"></div>
+<div class="seg" id="seg"></div>
 <div class="wrap"><table id="tbl"></table></div>
 <p class="muted" id="empty" style="display:none"></p>
 
@@ -55,48 +60,78 @@ async function load() {
   sel.innerHTML = DATA.days
     .map((d) => `<option value="${d.date}">${d.date}${d.hasComparison ? '' : '（朝のみ）'}</option>`)
     .join('');
-  sel.onchange = () => render(sel.value);
-  if (DATA.days.length) render(DATA.days[0].date);
+  sel.onchange = () => selectDay(sel.value);
+  if (DATA.days.length) selectDay(DATA.days[0].date);
   else document.getElementById('summary').textContent = 'まだデータがありません。';
 }
 
-function render(date) {
-  const d = DATA.days.find((x) => x.date === date);
+let CUR = null; // 現在の日データ
+function selectDay(date) {
+  CUR = DATA.days.find((x) => x.date === date);
+  document.getElementById('summary').innerHTML =
+    `<span class="pill">6時 ランク有 ${CUR.morningCount}件</span>` +
+    `<span class="pill">18時 ランク有 ${CUR.eveningCount}件</span>` +
+    `<span class="pill">比較 ${CUR.comparison.length}件</span>`;
+  // 表示できるビューを判定（比較 > 6:00 > 18:00 の優先で初期選択）
+  const views = [];
+  if (CUR.comparison.length) views.push('cmp');
+  if ((CUR.morningList || []).length) views.push('am');
+  if ((CUR.eveningList || []).length) views.push('pm');
+  const labels = { cmp: '朝→夕 比較', am: '6:00 リスト', pm: '18:00 リスト' };
+  const seg = document.getElementById('seg');
+  seg.innerHTML = ['cmp', 'am', 'pm']
+    .map((v) => {
+      const can = views.includes(v);
+      return `<button data-v="${v}" ${can ? '' : 'disabled'}>${labels[v]}</button>`;
+    })
+    .join('');
+  seg.querySelectorAll('button').forEach((b) => {
+    b.onclick = () => { if (!b.disabled) renderView(b.dataset.v); };
+  });
+  renderView(views[0] || 'am');
+}
+
+function renderView(view) {
+  document.querySelectorAll('#seg button').forEach((b) =>
+    b.classList.toggle('on', b.dataset.v === view)
+  );
   const tbl = document.getElementById('tbl');
   const empty = document.getElementById('empty');
-  document.getElementById('summary').innerHTML =
-    `<span class="pill">6時 ランク有 ${d.morningCount}件</span>` +
-    `<span class="pill">18時 ランク有 ${d.eveningCount}件</span>` +
-    `<span class="pill">比較対象 ${d.comparison.length}件</span>`;
-
-  if (!d.comparison.length) {
-    tbl.innerHTML = '';
-    empty.style.display = '';
-    empty.textContent = d.eveningCount
-      ? 'この日はまだ比較できません（朝・夕の両方が揃うと表示されます）。'
-      : 'この日は18時の集計がまだありません。';
-    return;
-  }
   empty.style.display = 'none';
-  const head =
-    '<tr><th>タイトル</th><th>巻</th><th class="num">6時</th><th class="num">18時</th>' +
-    '<th class="num">変化</th><th class="num">上昇率</th></tr>';
-  const rows = d.comparison
-    .map((r, i) => {
+
+  if (view === 'cmp') {
+    if (!CUR.comparison.length) { tbl.innerHTML = ''; return; }
+    const head =
+      '<tr><th>タイトル</th><th>巻</th><th class="num">6時</th><th class="num">18時</th>' +
+      '<th class="num">変化</th><th class="num">上昇率</th></tr>';
+    tbl.innerHTML = head + CUR.comparison.map((r, i) => {
       const pct = r['ランク上昇率(%)'];
       const cls = pct >= 0 ? 'up' : 'down';
-      return (
-        `<tr class="${i < 20 ? 'top20' : ''}">` +
+      return `<tr class="${i < 20 ? 'top20' : ''}">` +
         `<td class="title">${esc(r['タイトル'])}</td>` +
         `<td class="num">${r['巻数'] ?? ''}</td>` +
         `<td class="num">${r['6時順位']}</td>` +
         `<td class="num">${r['18時順位']}</td>` +
         `<td class="num">${esc(String(r['順位変化']))}</td>` +
-        `<td class="num ${cls}">${fmtPct(pct)}</td></tr>`
-      );
-    })
-    .join('');
-  tbl.innerHTML = head + rows;
+        `<td class="num ${cls}">${fmtPct(pct)}</td></tr>`;
+    }).join('');
+    return;
+  }
+
+  // 6:00 / 18:00 のその時点リスト
+  const list = view === 'am' ? CUR.morningList : CUR.eveningList;
+  if (!list || !list.length) {
+    tbl.innerHTML = '';
+    empty.style.display = '';
+    empty.textContent = 'この時間帯の集計はまだありません。';
+    return;
+  }
+  const head = '<tr><th class="num">順位</th><th>タイトル</th><th>巻</th></tr>';
+  tbl.innerHTML = head + list.map((r) =>
+    `<tr><td class="num">${esc(String(r['順位']))}</td>` +
+    `<td class="title">${esc(r['タイトル'])}</td>` +
+    `<td class="num">${esc(String(r['巻数'] ?? ''))}</td></tr>`
+  ).join('');
 }
 function esc(s) { return (s || '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 load();
