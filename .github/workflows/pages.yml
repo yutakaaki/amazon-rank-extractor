@@ -29,5 +29,21 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs
+      # GitHub Pages 配信基盤は一時的に "try again later" で失敗することがあるため、
+      # 失敗しても止めず、待って最大3回まで再試行する。
       - id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - name: wait before retry 1
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 120
+      - id: deployment2
+        if: steps.deployment.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - name: wait before retry 2
+        if: steps.deployment.outcome == 'failure' && steps.deployment2.outcome == 'failure'
+        run: sleep 180
+      - id: deployment3
+        if: steps.deployment.outcome == 'failure' && steps.deployment2.outcome == 'failure'
         uses: actions/deploy-pages@v4
