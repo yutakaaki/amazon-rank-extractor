@@ -27,13 +27,18 @@ cat > "$DAILY_PLIST" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>com.amazonrank.daily</string>
+  <!-- 実行時刻は起床時刻(5:58/17:58)と一致させ、caffeinate -i で実行中の再スリープを防ぐ。
+       (時刻をずらすと起床→再スリープの隙間でジョブが次の起床まで遅延するため) -->
   <key>ProgramArguments</key>
-  <array><string>$NODE_BIN</string><string>$PROJECT_DIR/src/daily.js</string></array>
+  <array>
+    <string>/usr/bin/caffeinate</string><string>-i</string>
+    <string>$NODE_BIN</string><string>$PROJECT_DIR/src/daily.js</string>
+  </array>
   <key>WorkingDirectory</key><string>$PROJECT_DIR</string>
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>5</integer><key>Minute</key><integer>58</integer></dict>
+    <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>58</integer></dict>
   </array>
   <key>StandardOutPath</key><string>$PROJECT_DIR/logs/daily.out.log</string>
   <key>StandardErrorPath</key><string>$PROJECT_DIR/logs/daily.out.log</string>
