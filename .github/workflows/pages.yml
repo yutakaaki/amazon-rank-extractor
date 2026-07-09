@@ -22,28 +22,38 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.d1.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs
-      # GitHub Pages 配信基盤は一時的に "try again later" で失敗することがあるため、
-      # 失敗しても止めず、待って最大3回まで再試行する。
-      - id: deployment
+      # GitHub Pages 配信基盤は一時的に "try again later" で失敗することがある。
+      # 失敗が続く時間帯をまたげるよう、間隔を広げて最大5回まで再試行する(計~20分)。
+      - id: d1
         continue-on-error: true
         uses: actions/deploy-pages@v4
-      - name: wait before retry 1
-        if: steps.deployment.outcome == 'failure'
+      - if: steps.d1.outcome == 'failure'
         run: sleep 120
-      - id: deployment2
-        if: steps.deployment.outcome == 'failure'
+      - id: d2
+        if: steps.d1.outcome == 'failure'
         continue-on-error: true
         uses: actions/deploy-pages@v4
-      - name: wait before retry 2
-        if: steps.deployment.outcome == 'failure' && steps.deployment2.outcome == 'failure'
+      - if: steps.d1.outcome == 'failure' && steps.d2.outcome == 'failure'
         run: sleep 180
-      - id: deployment3
-        if: steps.deployment.outcome == 'failure' && steps.deployment2.outcome == 'failure'
+      - id: d3
+        if: steps.d1.outcome == 'failure' && steps.d2.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - if: steps.d1.outcome == 'failure' && steps.d2.outcome == 'failure' && steps.d3.outcome == 'failure'
+        run: sleep 300
+      - id: d4
+        if: steps.d1.outcome == 'failure' && steps.d2.outcome == 'failure' && steps.d3.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+      - if: steps.d1.outcome == 'failure' && steps.d2.outcome == 'failure' && steps.d3.outcome == 'failure' && steps.d4.outcome == 'failure'
+        run: sleep 420
+      - id: d5
+        if: steps.d1.outcome == 'failure' && steps.d2.outcome == 'failure' && steps.d3.outcome == 'failure' && steps.d4.outcome == 'failure'
         uses: actions/deploy-pages@v4
