@@ -239,9 +239,32 @@ function pushResults(message) {
     }
     git(['push', 'origin', 'main']);
     console.log('[daily] GitHub へ push 完了');
+    triggerPagesDeploy();
   } catch (e) {
     console.warn('[daily] push に失敗(ローカルには保存済み): ' + (e.message || e));
   }
+}
+
+// Pages公開ワークフローを明示的に起動する。
+// GitHubのpush自動トリガーは稀に取りこぼすため、push後に直接キックして確実にする。
+// gh が見つからない/失敗しても致命的ではない(push自動トリガー側で拾われることも多い)。
+function triggerPagesDeploy() {
+  const candidates = [
+    `${process.env.HOME}/.local/bin/gh`,
+    '/usr/local/bin/gh',
+    '/opt/homebrew/bin/gh',
+    'gh',
+  ];
+  for (const gh of candidates) {
+    try {
+      execFileSync(gh, ['workflow', 'run', 'pages.yml'], { cwd: ROOT, stdio: 'ignore' });
+      console.log('[daily] Pages公開ワークフローを起動');
+      return;
+    } catch {
+      /* 次の候補を試す */
+    }
+  }
+  console.warn('[daily] Pages公開の明示起動に失敗(自動トリガー側に委ねる)');
 }
 
 // 1日2回のスリープ自動起床を維持するための再設定。
