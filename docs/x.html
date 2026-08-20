@@ -6,14 +6,15 @@
 <title>本日のTOP5 X投稿ドラフト</title>
 <style>
   :root { color-scheme: light dark; }
-  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 16px; max-width: 720px; margin: 0 auto; line-height: 1.5; }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0 auto; padding: 16px; max-width: 720px; line-height: 1.5; }
   h1 { font-size: 1.2rem; }
+  h2 { font-size: 1rem; margin-top: 26px; }
   .muted { opacity: .65; font-size: 13px; }
   .note { background: rgba(127,127,127,.12); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin: 10px 0; }
   .card { border: 1px solid rgba(127,127,127,.3); border-radius: 12px; padding: 14px; margin: 14px 0; }
   .rank { font-weight: 700; font-size: 1.05rem; }
   .badge { display:inline-block; background:#2563eb; color:#fff; border-radius:6px; padding:1px 8px; font-size:12px; margin-left:6px; }
-  .warn { background:#f59e0b; }
+  .badge.warn { background:#f59e0b; }
   textarea { width: 100%; box-sizing: border-box; font-size: 15px; padding: 8px; border-radius: 8px; border: 1px solid #999; min-height: 108px; }
   input[type=text] { width: 100%; box-sizing: border-box; font-size: 15px; padding: 8px; border-radius: 8px; border: 1px solid #999; margin-top: 6px; }
   .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
@@ -21,6 +22,7 @@
   .btn.primary { background: #2563eb; color: #fff; }
   .btn.sec { background: #475569; color: #fff; }
   .btn.ghost { background: rgba(127,127,127,.18); color: inherit; }
+  .btn.danger { background: rgba(220,38,38,.15); color: #dc2626; font-weight: 600; }
   .amz { font-size: 13px; }
   .cands { margin: 10px 0 4px; font-size: 13px; }
   .cand { border-left: 3px solid #2563eb; padding: 7px 10px; margin: 7px 0; background: rgba(127,127,127,.08); border-radius: 0 8px 8px 0; }
@@ -36,109 +38,169 @@
   .badge.k-off { background:#2563eb; }
   .badge.k-au  { background:#7c3aed; }
   .badge.k-other { background:#94a3b8; }
+  .pool { border-top: 1px solid rgba(127,127,127,.3); }
+  .prow { display:flex; align-items:center; gap:10px; padding:9px 4px; border-bottom:1px solid rgba(127,127,127,.18); font-size:14px; }
+  .prow .r { font-variant-numeric: tabular-nums; opacity:.7; min-width:3.4em; }
+  .prow .t { flex:1; }
+  .prow .btn { padding:6px 12px; font-size:13px; }
+  .edited { background:#7c3aed; }
 </style>
 </head>
 <body>
 <h1>📣 本日のTOP5 X投稿ドラフト</h1>
 <p class="muted" id="head"></p>
 <div class="note">
-  投稿手順：<b>⑤→①の順</b>に連続投稿します（タイムラインで①が上に来る）。<br>
-  各カードで「発売告知を検索」→公式/連載媒体（無ければ作者）の告知ポストURLを貼り →「引用して投稿」。<br>
-  告知が見つからない順位は<b>保留</b>してご自身で判断してください（無理に引用しない）。
+  <b>⑤→①の順</b>に連続投稿します（タイムラインで①が上に来る）。<br>
+  各カードで引用元の候補を選び「引用して投稿」→ 内容を確認して投稿してください。<br>
+  公式告知が見つからない順位は<b>保留</b>を推奨します。<br>
+  <b>選出を変えたい場合</b>は「この作品を外す」→ 下の候補一覧から「追加」で差し替えできます。
 </div>
 <div id="list"></div>
 
+<h2>差し替え候補（18時時点・巻1〜10）<span id="reset"></span></h2>
+<div class="muted" id="poolnote"></div>
+<div class="pool" id="poolList"></div>
+
 <script>
 const enc = encodeURIComponent;
-async function load(){
-  let data;
-  try { data = await (await fetch('./xtop5.json?_='+Date.now())).json(); }
-  catch(e){ document.getElementById('head').textContent = 'ドラフトがまだありません（夕方の実行後に生成されます）。'; return; }
+const CIRCLED = ['①','②','③','④','⑤'];
+let DATA = null, SEL = [];   // SEL: 選択中のASIN配列
+
+function storeKey(){ return 'xtop5:' + (DATA?DATA.date:''); }
+function save(){ try{ localStorage.setItem(storeKey(), JSON.stringify(SEL)); }catch(e){} }
+function load(){ try{ const v=localStorage.getItem(storeKey()); return v?JSON.parse(v):null; }catch(e){ return null; } }
+
+function jpDate(d){ const m=String(d).match(/(\d{4})-(\d{2})-(\d{2})/); return m? `${m[1]}年${+m[2]}月${+m[3]}日` : d; }
+function tweetText(circled, title){ return `【${jpDate(DATA.date)}時点】\n📚今売れている注目の新刊コミック${circled}\n\n${title}`; }
+function itemOf(asin){ return (DATA.pool||[]).find(p=>p.asin===asin); }
+function postsOf(asin){ return (DATA.postsByAsin||{})[asin] || []; }
+
+async function boot(){
+  try { DATA = await (await fetch('./xtop5.json?_='+Date.now())).json(); }
+  catch(e){ document.getElementById('head').textContent='ドラフトがまだありません（夕方の実行後に生成されます）。'; return; }
+  const auto = (DATA.top5||[]).map(t=>t.asin);
+  const saved = load();
+  SEL = (saved && saved.length) ? saved.filter(a=>itemOf(a)) : auto;
   document.getElementById('head').textContent =
-    `${data.date} 時点 / ${data.top5.length}件 ・ 生成 ${new Date(data.generatedAt).toLocaleString('ja-JP')}`;
-  // ⑤→① の順に並べる（投稿順）
-  const order = [...data.top5].reverse();
-  document.getElementById('list').innerHTML = order.map(cardHtml).join('');
-  order.forEach(t => bind(t));
+    `${DATA.date} 時点 ・ 生成 ${new Date(DATA.generatedAt).toLocaleString('ja-JP')}`;
+  render();
 }
-function cardHtml(t){
-  const warn = t.要巻数確認 ? '<span class="badge warn">巻数要確認</span>' : '';
-  return `<div class="card" id="card-${t.位}">
-    <div class="rank">${t.丸数字} <span class="muted">コミック ${t.順位}位 ・ ${t.巻数!=null?('第'+t.巻数+'巻'):'巻数不明'}</span> ${warn}</div>
-    <div class="amz muted">${escapeHtml(t.タイトル)}<br>
-      <a href="${t.amazonUrl}" target="_blank" rel="noopener">Amazon作品ページ</a></div>
-    <textarea id="txt-${t.位}">${escapeHtml(t.投稿文)}</textarea>
-    ${candidatesHtml(t)}
-    <input type="text" id="url-${t.位}" placeholder="引用する告知ポストURL（上の候補から選ぶか貼り付け）">
+
+function selectedSorted(){
+  return SEL.map(itemOf).filter(Boolean).sort((a,b)=>a.順位-b.順位);
+}
+function isEdited(){
+  const auto=(DATA.top5||[]).map(t=>t.asin).join(',');
+  return selectedSorted().map(i=>i.asin).join(',') !== auto;
+}
+
+function render(){
+  const items = selectedSorted();
+  // 投稿順は ⑤→① なので逆順に描画
+  const withNo = items.map((it,i)=>({it, no:CIRCLED[i]||'', idx:i}));
+  document.getElementById('list').innerHTML =
+    [...withNo].reverse().map(cardHtml).join('') ||
+    '<div class="warnbox">選出が空です。下の候補一覧から追加してください。</div>';
+  withNo.forEach(w=>bind(w));
+
+  // 候補一覧
+  const rest = (DATA.pool||[]).filter(p=>!SEL.includes(p.asin));
+  const full = SEL.length>=5;
+  document.getElementById('poolnote').textContent =
+    `選択中 ${SEL.length}/5 件${full?'（5件に達しています。差し替えるには先に外してください）':''}`;
+  document.getElementById('poolList').innerHTML = rest.map(p=>`
+    <div class="prow">
+      <span class="r">${p.順位}位</span>
+      <span class="t">${escapeHtml(p.タイトル)} ${p.巻数!=null?`<span class="muted">第${p.巻数}巻</span>`:'<span class="badge warn">巻数要確認</span>'}</span>
+      <button class="btn ${full?'ghost':'primary'} add" data-asin="${escapeHtml(p.asin)}" ${full?'disabled':''}>追加</button>
+    </div>`).join('') || '<div class="muted" style="padding:10px 0">他の候補はありません。</div>';
+  document.querySelectorAll('.add').forEach(b=>{
+    b.onclick=()=>{ if(SEL.length>=5) return; SEL.push(b.dataset.asin); save(); render(); window.scrollTo({top:0,behavior:'smooth'}); };
+  });
+
+  document.getElementById('reset').innerHTML = isEdited()
+    ? ' <button class="btn ghost" id="resetBtn" style="font-size:12px;padding:5px 10px">自動選出に戻す</button>' : '';
+  const rb=document.getElementById('resetBtn');
+  if(rb) rb.onclick=()=>{ SEL=(DATA.top5||[]).map(t=>t.asin); save(); render(); };
+}
+
+function cardHtml({it,no,idx}){
+  const warn = it.要巻数確認 ? '<span class="badge warn">巻数要確認</span>' : '';
+  const edited = isEdited() ? '<span class="badge edited">手動選出</span>' : '';
+  return `<div class="card" id="card-${idx}">
+    <div class="rank">${no} <span class="muted">コミック ${it.順位}位 ・ ${it.巻数!=null?('第'+it.巻数+'巻'):'巻数不明'}</span> ${warn} ${edited}</div>
+    <div class="amz muted">${escapeHtml(it.タイトル)}<br>
+      <a href="${it.amazonUrl}" target="_blank" rel="noopener">Amazon作品ページ</a></div>
+    <textarea id="txt-${idx}">${escapeHtml(tweetText(no, it.タイトル))}</textarea>
+    ${candidatesHtml(it, idx)}
+    <input type="text" id="url-${idx}" placeholder="引用する告知ポストURL（上の候補から選ぶか貼り付け）">
     <div class="btns">
-      <a class="btn sec" href="${t.検索URL}" target="_blank" rel="noopener">🔎 発売告知を検索</a>
-      <button class="btn primary" data-act="quote" data-i="${t.位}">引用して投稿</button>
-      <button class="btn ghost" data-act="plain" data-i="${t.位}">引用なしで投稿</button>
-      <button class="btn ghost" data-act="copy" data-i="${t.位}">本文コピー</button>
+      <a class="btn sec" href="${it.検索URL}" target="_blank" rel="noopener">🔎 発売告知を検索</a>
+      <button class="btn primary" data-act="quote" data-i="${idx}">引用して投稿</button>
+      <button class="btn ghost" data-act="plain" data-i="${idx}">引用なしで投稿</button>
+      <button class="btn ghost" data-act="copy" data-i="${idx}">本文コピー</button>
+      <button class="btn danger" data-act="remove" data-i="${idx}" data-asin="${escapeHtml(it.asin)}">この作品を外す</button>
     </div>
   </div>`;
 }
 
-// 検索で見つかった発売告知の候補ポストを表示する。
-function candidatesHtml(t){
-  const cs = t.候補ポスト || [];
-  if (t.loginRequired) {
-    return `<div class="cands warnbox">⚠️ Xのセッションが切れています。Macで <b>scripts/x-login.command</b> を実行して再ログインしてください（それまでは検索リンクをご利用ください）。</div>`;
+function candidatesHtml(it, idx){
+  const cs = postsOf(it.asin);
+  if (DATA.loginRequired) {
+    return `<div class="cands warnbox">⚠️ Xのセッションが切れています。Macで <b>scripts/x-login.command</b> を実行して再ログインしてください。</div>`;
   }
   if (!cs.length) {
     return `<div class="cands muted">告知ポストの候補が見つかりませんでした。「🔎 発売告知を検索」から探すか、<b>保留</b>してください。</div>`;
   }
-  const hasOfficial = cs.some(c => c.kind === '公式・媒体');
+  const hasOfficial = cs.some(c=>c.kind==='公式・媒体');
   const head = hasOfficial
     ? '<div class="muted">引用元の候補（公式・媒体を優先表示）:</div>'
     : '<div class="warnbox">⚠️ <b>公式・連載媒体の発売告知が見つかりませんでした。</b>この順位は<b>保留</b>を推奨します（下は参考候補）。</div>';
-  return `<div class="cands">
-    ${head}
-    ${cs.map(c => {
-      const kindCls = c.kind === '公式・媒体' ? 'k-off' : (c.kind === '作者・作品' ? 'k-au' : 'k-other');
+  return `<div class="cands">${head}
+    ${cs.map(c=>{
+      const kc = c.kind==='公式・媒体'?'k-off':(c.kind==='作者・作品'?'k-au':'k-other');
       const when = c.datetime ? new Date(c.datetime).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
-      return `<div class="cand ${kindCls}">
-        <div>
-          <b>${escapeHtml(c.name)}</b> <span class="muted">${escapeHtml(c.handle)}</span>
-          ${c.verified ? '<span class="chk">✔︎</span>' : ''}
-          <span class="badge ${kindCls}">${escapeHtml(c.kind||'その他')}</span>
-          <span class="muted"> ${when}</span>
-        </div>
-        <div class="ctext">${escapeHtml(String(c.text||'').replace(/\\n/g,' ')).slice(0,110)}</div>
+      return `<div class="cand ${kc}">
+        <div><b>${escapeHtml(c.name)}</b> <span class="muted">${escapeHtml(c.handle)}</span>
+          ${c.verified?'<span class="chk">✔︎</span>':''}
+          <span class="badge ${kc}">${escapeHtml(c.kind||'その他')}</span>
+          <span class="muted"> ${when}</span></div>
+        <div class="ctext">${escapeHtml(String(c.text||'').replace(/\n/g,' ')).slice(0,110)}</div>
         <div class="btns">
-          <button class="btn ghost pick" data-i="${t.位}" data-url="${escapeHtml(c.url)}">この投稿を引用元にする</button>
+          <button class="btn ghost pick" data-i="${idx}" data-url="${escapeHtml(c.url)}">この投稿を引用元にする</button>
           <a class="btn ghost" href="${escapeHtml(c.url)}" target="_blank" rel="noopener">ポストを開く</a>
-        </div>
-      </div>`;
-    }).join('')}
-  </div>`;
+        </div></div>`;
+    }).join('')}</div>`;
 }
-function bind(t){
-  // 候補ポストを引用元として選ぶ
-  document.querySelectorAll(`#card-${t.位} button.pick`).forEach(b=>{
-    b.onclick = () => {
-      document.getElementById('url-'+t.位).value = b.dataset.url;
-      document.querySelectorAll(`#card-${t.位} .cand`).forEach(c=>c.classList.remove('sel'));
+
+function bind({idx}){
+  document.querySelectorAll(`#card-${idx} button.pick`).forEach(b=>{
+    b.onclick=()=>{
+      document.getElementById('url-'+idx).value=b.dataset.url;
+      document.querySelectorAll(`#card-${idx} .cand`).forEach(c=>c.classList.remove('sel'));
       b.closest('.cand').classList.add('sel');
     };
   });
-  document.querySelectorAll(`#card-${t.位} button:not(.pick)`).forEach(b=>{
-    b.onclick = () => {
-      const text = document.getElementById('txt-'+t.位).value;
-      const url = (document.getElementById('url-'+t.位).value||'').trim();
-      const act = b.dataset.act;
+  document.querySelectorAll(`#card-${idx} button:not(.pick)`).forEach(b=>{
+    b.onclick=()=>{
+      const act=b.dataset.act;
+      if(act==='remove'){
+        SEL = SEL.filter(a=>a!==b.dataset.asin); save(); render(); return;
+      }
+      const text=document.getElementById('txt-'+idx).value;
+      const url=(document.getElementById('url-'+idx).value||'').trim();
       if(act==='copy'){ navigator.clipboard.writeText(text); b.textContent='コピー済'; setTimeout(()=>b.textContent='本文コピー',1200); return; }
       if(act==='quote'){
-        if(!url){ alert('引用したい告知ポストのURLを貼ってください（無ければ「引用なしで投稿」）'); return; }
-        window.open('https://twitter.com/intent/tweet?text='+enc(text)+'&url='+enc(url), '_blank');
-      } else {
-        window.open('https://twitter.com/intent/tweet?text='+enc(text), '_blank');
+        if(!url){ alert('引用したい告知ポストのURLを選ぶか貼り付けてください（無ければ「引用なしで投稿」）'); return; }
+        window.open('https://twitter.com/intent/tweet?text='+enc(text)+'&url='+enc(url),'_blank');
+      } else if(act==='plain'){
+        window.open('https://twitter.com/intent/tweet?text='+enc(text),'_blank');
       }
     };
   });
 }
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-load();
+boot();
 </script>
 </body>
 </html>
