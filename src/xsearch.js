@@ -55,16 +55,63 @@ export function buildQueries(rawTitle, volume) {
   return qs;
 }
 
-// 公式らしさのスコア(高いほど公式/媒体アカウントらしい)。
-export function officialScore({ handle = '', name = '', verified = false, text = '' }) {
+const toHalf = (s) =>
+  String(s || '').replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+
+// 候補ポストを評価する。
+// 目的は「その作品・その巻の、公式(出版社/連載媒体)または作者による発売告知」を上位に出すこと。
+// 作品名がどこにも出てこない投稿は誤マッチとして除外(score < 0)。
+export function scoreCandidate(
+  { handle = '', name = '', verified = false, text = '' },
+  { core = '', volume = null } = {}
+) {
+  const who = `${handle} ${name}`;
+  const body = toHalf(text);
+  const titleInText = core && text.includes(core);
+  const titleInName = core && name.includes(core);
+
+  // 作品名が本文にもアカウント名にも無ければ別作品の誤マッチ
+  if (!titleInText && !titleInName) return { score: -1, kind: '無関係' };
+
   let s = 0;
-  const hay = `${handle} ${name}`;
-  if (verified) s += 3;
-  if (/公式|編集部|編集|コミックス|comics?|magazine|マガジン|書店|出版|BOOKS?/i.test(hay)) s += 3;
-  if (/(講談社|集英社|小学館|KADOKAWA|角川|白泉社|秋田書店|竹書房|一迅社|スクウェア|SQUARE|芳文社|双葉社|新潮社|少年画報|LINE|コアミックス|マッグガーデン|ヒーローズ)/i.test(hay)) s += 3;
-  if (/発売|刊行|配信開始|本日発売/.test(text)) s += 2;
-  if (/単行本|コミックス|最新刊|第?\d+巻/.test(text)) s += 1;
-  return s;
+  let kind = 'その他';
+
+  // 発売告知らしさ
+  const isAnnounce = /発売|刊行|配信開始|本日発売|発売中|重版/.test(text);
+  if (isAnnounce) s += 3;
+
+  // 巻数の一致/不一致(重要): 対象巻に言及していれば加点、別巻の話なら減点
+  if (volume != null) {
+    const v = String(volume);
+    const hitTarget = new RegExp(`(第\\s*)?${v}\\s*巻|[（(]\\s*${v}\\s*[)）]`).test(body);
+    const otherVol = [...body.matchAll(/(?:第\s*)?(\d{1,3})\s*巻/g)].map((m) => m[1]);
+    if (hitTarget) s += 4;
+    else if (otherVol.length && !otherVol.includes(v)) s -= 3; // 別の巻の告知
+  }
+
+  // 公式(出版社・レーベル・連載媒体)らしさ
+  const publisherish =
+    /公式|編集部|コミックス|comics?|magazine|マガジン|出版|BOOKS?|文庫|少年|ヤング|月刊|週刊/i.test(who) ||
+    /(講談社|集英社|小学館|KADOKAWA|角川|白泉社|秋田書店|竹書房|一迅社|スクウェア|SQUARE|芳文社|双葉社|新潮社|少年画報|コアミックス|マッグガーデン|ヒーローズ|フレックス|LINE)/i.test(who);
+  if (publisherish) {
+    s += 5;
+    kind = '公式・媒体';
+  }
+  if (verified) s += 2;
+
+  // 作者/作品アカウント(アカウント名に作品名が入っている等)
+  if (titleInName) {
+    s += 4;
+    if (kind === 'その他') kind = '作者・作品';
+  }
+
+  // 情報収集bot・まとめ・書店ブログ等は引用元として不適切なので減点
+  if (/新刊|まとめ|ランキング|売れてます|レビュー|review|bot|情報|書店/i.test(who)) {
+    s -= 4;
+    if (kind === 'その他') kind = '情報・書店';
+  }
+
+  return { score: s, kind };
 }
 
 // 永続プロファイルでブラウザを開く。
@@ -119,6 +166,7 @@ async function isLoggedIn(page) {
 // 戻り値: { queries, loginRequired, candidates: [{url, handle, name, text, datetime, verified, score}] }
 export async function searchAnnouncements(context, rawTitle, volume, { max = 6 } = {}) {
   const queries = buildQueries(rawTitle, volume);
+  const { core } = parseTitle(rawTitle);
   const page = await context.newPage();
   const seen = new Map();
   let loginRequired = false;
@@ -160,7 +208,9 @@ export async function searchAnnouncements(context, rawTitle, volume, { max = 6 }
 
       for (const it of items) {
         if (!it.url || seen.has(it.url)) continue;
-        seen.set(it.url, { ...it, score: officialScore(it) });
+        const { score, kind } = scoreCandidate(it, { core, volume });
+        if (score < 0) continue; // 別作品の誤マッチは捨てる
+        seen.set(it.url, { ...it, score, kind });
       }
       if (seen.size >= max) break;
       await sleep(2500);
@@ -169,10 +219,19 @@ export async function searchAnnouncements(context, rawTitle, volume, { max = 6 }
     await page.close();
   }
 
+  // 種別を最優先で並べる(公式・媒体 → 作者・作品 → その他)。
+  // ご要望どおり「出版社公式/連載媒体の告知」を引用元の第一候補にするため。
+  const kindRank = { '公式・媒体': 0, '作者・作品': 1, '情報・書店': 2, その他: 3 };
   const candidates = [...seen.values()]
-    .sort((a, b) => b.score - a.score || (b.datetime || '').localeCompare(a.datetime || ''))
+    .sort(
+      (a, b) =>
+        (kindRank[a.kind] ?? 9) - (kindRank[b.kind] ?? 9) ||
+        b.score - a.score ||
+        (b.datetime || '').localeCompare(a.datetime || '')
+    )
     .slice(0, max);
-  return { queries, loginRequired, candidates };
+  const hasOfficial = candidates.some((c) => c.kind === '公式・媒体');
+  return { queries, loginRequired, candidates, hasOfficial };
 }
 
 // 複数作品ぶんをまとめて取得(呼び出し側でブラウザを共有)。
