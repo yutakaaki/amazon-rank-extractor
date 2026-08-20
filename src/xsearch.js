@@ -16,10 +16,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 export const PROFILE_DIR = join(ROOT, '.x-profile');
 
-const UA =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/124.0 Safari/537.36';
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 検索用にタイトルを整形する。
@@ -72,14 +68,40 @@ export function officialScore({ handle = '', name = '', verified = false, text =
 }
 
 // 永続プロファイルでブラウザを開く。
+// 重要: UAを固定値で詐称しない。実際のブラウザ版と食い違うと自動化として弾かれるため、
+// ヘッドレス時のみ "HeadlessChrome" 表記を "Chrome" に置換して整合を取る。
+let cachedUA = null;
+// 実際のChromiumのメジャーバージョンに一致するUAを作る。
+// (固定の古いUAを名乗るとバージョン不整合で自動化と判定されるため)
+async function realisticUA() {
+  if (cachedUA) return cachedUA;
+  const b = await chromium.launch({ args: ['--no-sandbox'] });
+  const major = (b.version() || '').split('.')[0] || '140';
+  await b.close();
+  cachedUA =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+    `(KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+  return cachedUA;
+}
+
 async function openContext({ headless = true } = {}) {
-  return chromium.launchPersistentContext(PROFILE_DIR, {
+  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
     headless,
     locale: 'ja-JP',
-    userAgent: UA,
+    timezoneId: 'Asia/Tokyo',
     viewport: { width: 1280, height: 900 },
-    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    userAgent: await realisticUA(),
+    args: [
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled', // navigator.webdriver 対策
+    ],
   });
+  // 自動化フラグを隠す(ログイン画面での誤検知を避ける)
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
+  return context;
 }
 
 // ログイン済みかどうか(検索結果が見えるか)を判定。
@@ -186,9 +208,35 @@ async function mainCli() {
     const context = await openContext({ headless: false });
     const page = context.pages()[0] || (await context.newPage());
     await page.goto('https://x.com/login', { waitUntil: 'domcontentloaded' }).catch(() => {});
-    // ウィンドウが閉じられるまで待つ
-    await new Promise((resolve) => context.on('close', resolve));
-    console.log('ログイン用ブラウザを閉じました。セッションは .x-profile に保存されます。');
+
+    // ログイン完了(auth_token の発行)を検知したら知らせる。最大10分待つ。
+    let ok = false;
+    const deadline = Date.now() + 10 * 60 * 1000;
+    let closed = false;
+    context.on('close', () => (closed = true));
+    while (Date.now() < deadline && !closed) {
+      await sleep(3000);
+      try {
+        const cookies = await context.cookies('https://x.com');
+        if (cookies.some((c) => c.name === 'auth_token' && c.value)) {
+          ok = true;
+          break;
+        }
+      } catch {
+        break; // コンテキストが閉じられた
+      }
+    }
+    if (ok) {
+      console.log('\n✅ ログインを確認しました。ブラウザを閉じて構いません。');
+      await sleep(1500);
+      await context.close().catch(() => {});
+    } else if (closed) {
+      console.log('\n⚠️ ログインが完了しないままブラウザが閉じられました。');
+      console.log('   もう一度お試しください（うまくいかない場合はお知らせください）。');
+    } else {
+      console.log('\n⚠️ 時間内にログインを確認できませんでした。');
+      await context.close().catch(() => {});
+    }
     return;
   }
   if (arg === '--test') {
