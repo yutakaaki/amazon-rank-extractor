@@ -2,3 +2,7 @@ node_modules/
 logs/
 *.log
 .DS_Store
+
+# Xのログインセッション(機密) — 絶対にコミットしない
+.x-profile/
+probe.mjs

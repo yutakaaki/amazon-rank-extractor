@@ -22,6 +22,14 @@
   .btn.sec { background: #475569; color: #fff; }
   .btn.ghost { background: rgba(127,127,127,.18); color: inherit; }
   .amz { font-size: 13px; }
+  .cands { margin: 10px 0 4px; font-size: 13px; }
+  .cand { border-left: 3px solid #2563eb; padding: 7px 10px; margin: 7px 0; background: rgba(127,127,127,.08); border-radius: 0 8px 8px 0; }
+  .cand .btns { margin-top: 5px; }
+  .cand .btn { padding: 6px 10px; font-size: 13px; }
+  .ctext { opacity: .8; margin-top: 3px; }
+  .chk { color: #2563eb; font-weight: 700; }
+  .warnbox { background: rgba(245,158,11,.18); border-radius: 8px; padding: 9px 11px; }
+  .cand.sel { border-left-color: #16a34a; background: rgba(22,163,74,.14); }
 </style>
 </head>
 <body>
@@ -54,7 +62,8 @@ function cardHtml(t){
     <div class="amz muted">${escapeHtml(t.タイトル)}<br>
       <a href="${t.amazonUrl}" target="_blank" rel="noopener">Amazon作品ページ</a></div>
     <textarea id="txt-${t.位}">${escapeHtml(t.投稿文)}</textarea>
-    <input type="text" id="url-${t.位}" placeholder="公式/作者の発売告知ポストURL（任意・引用したい時だけ）">
+    ${candidatesHtml(t)}
+    <input type="text" id="url-${t.位}" placeholder="引用する告知ポストURL（上の候補から選ぶか貼り付け）">
     <div class="btns">
       <a class="btn sec" href="${t.検索URL}" target="_blank" rel="noopener">🔎 発売告知を検索</a>
       <button class="btn primary" data-act="quote" data-i="${t.位}">引用して投稿</button>
@@ -63,8 +72,47 @@ function cardHtml(t){
     </div>
   </div>`;
 }
+
+// 検索で見つかった発売告知の候補ポストを表示する。
+function candidatesHtml(t){
+  const cs = t.候補ポスト || [];
+  if (t.loginRequired) {
+    return `<div class="cands warnbox">⚠️ Xのセッションが切れています。Macで <b>scripts/x-login.command</b> を実行して再ログインしてください（それまでは検索リンクをご利用ください）。</div>`;
+  }
+  if (!cs.length) {
+    return `<div class="cands muted">告知ポストの候補が見つかりませんでした。「🔎 発売告知を検索」から探すか、<b>保留</b>してください。</div>`;
+  }
+  return `<div class="cands">
+    <div class="muted">引用元の候補（公式らしい順）:</div>
+    ${cs.map(c => {
+      const official = c.score >= 6;
+      const when = c.datetime ? new Date(c.datetime).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+      return `<div class="cand">
+        <div>
+          <b>${escapeHtml(c.name)}</b> <span class="muted">${escapeHtml(c.handle)}</span>
+          ${c.verified ? '<span class="chk">✔︎</span>' : ''}
+          ${official ? '<span class="badge">公式らしい</span>' : ''}
+          <span class="muted"> ${when}</span>
+        </div>
+        <div class="ctext">${escapeHtml(String(c.text||'').replace(/\\n/g,' ')).slice(0,110)}</div>
+        <div class="btns">
+          <button class="btn ghost pick" data-i="${t.位}" data-url="${escapeHtml(c.url)}">この投稿を引用元にする</button>
+          <a class="btn ghost" href="${escapeHtml(c.url)}" target="_blank" rel="noopener">ポストを開く</a>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
 function bind(t){
-  document.querySelectorAll(`#card-${t.位} button`).forEach(b=>{
+  // 候補ポストを引用元として選ぶ
+  document.querySelectorAll(`#card-${t.位} button.pick`).forEach(b=>{
+    b.onclick = () => {
+      document.getElementById('url-'+t.位).value = b.dataset.url;
+      document.querySelectorAll(`#card-${t.位} .cand`).forEach(c=>c.classList.remove('sel'));
+      b.closest('.cand').classList.add('sel');
+    };
+  });
+  document.querySelectorAll(`#card-${t.位} button:not(.pick)`).forEach(b=>{
     b.onclick = () => {
       const text = document.getElementById('txt-'+t.位).value;
       const url = (document.getElementById('url-'+t.位).value||'').trim();

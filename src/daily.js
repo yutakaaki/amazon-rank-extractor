@@ -22,6 +22,7 @@ import {
   fetchComicBestsellerRanks,
 } from './scraper.js';
 import { buildXTop5 } from './xdraft.js';
+import { searchForItems } from './xsearch.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -127,13 +128,38 @@ async function main() {
 
     // 本日発売の新刊TOP5(巻1〜10)のX投稿ドラフトを生成 → docs/xtop5.json
     const top5 = buildXTop5(records, date, bestsellerRanks);
+
+    // 各作品の「発売告知ポスト」候補をXで検索して添付する。
+    // .x-profile が未ログインでも致命的ではない(loginRequired を立てて続行)。
+    let withPosts = top5;
+    if (top5.length) {
+      try {
+        const found = await searchForItems(
+          top5.map((t) => ({ 位: t.位, title: t.タイトル, volume: t.巻数 })),
+          { max: 5 }
+        );
+        const byPos = new Map(found.map((f) => [f.位, f]));
+        withPosts = top5.map((t) => {
+          const f = byPos.get(t.位) || {};
+          return { ...t, 候補ポスト: f.candidates || [], loginRequired: !!f.loginRequired };
+        });
+        const total = withPosts.reduce((n, t) => n + t.候補ポスト.length, 0);
+        console.log(
+          `[daily] 発売告知の候補ポスト ${total} 件を取得` +
+            (withPosts.some((t) => t.loginRequired) ? ' (※Xの再ログインが必要)' : '')
+        );
+      } catch (e) {
+        console.warn('[daily] X検索に失敗(ドラフトは検索リンクのみ): ' + (e.message || e));
+      }
+    }
+
     mkdirSync(DOCS_DIR, { recursive: true });
     writeFileSync(
       join(DOCS_DIR, 'xtop5.json'),
-      JSON.stringify({ date, generatedAt: new Date().toISOString(), top5 }),
+      JSON.stringify({ date, generatedAt: new Date().toISOString(), top5: withPosts }),
       'utf8'
     );
-    console.log(`[daily] X投稿ドラフト(TOP5)を出力: docs/xtop5.json (${top5.length}件)`);
+    console.log(`[daily] X投稿ドラフト(TOP5)を出力: docs/xtop5.json (${withPosts.length}件)`);
   }
 
   // GitHub Pages 用ダイジェスト(docs/data.json)を全スナップショットから再生成
