@@ -15,7 +15,13 @@ import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GENRES } from './config.js';
-import { createBrowser, collectByDate, scrapeProduct } from './scraper.js';
+import {
+  createBrowser,
+  collectByDate,
+  scrapeProduct,
+  fetchComicBestsellerRanks,
+} from './scraper.js';
+import { buildXTop5 } from './xdraft.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -64,6 +70,7 @@ async function main() {
 
   const { browser, context } = await createBrowser({ headless: true });
   const records = [];
+  let bestsellerRanks = new Map();
   try {
     const candidates = await collectByDate(context, GENRES[GENRE].searchBase, date);
     console.log(`[daily] ${date} 発売の候補 ${candidates.length} 件`);
@@ -84,6 +91,11 @@ async function main() {
       process.stdout.write(
         `  [${i}/${candidates.length}] ${records.at(-1).rank ?? '—'} ${records.at(-1).title.slice(0, 26)}\n`
       );
+    }
+    // 夕の回は公開コミックランキング(1〜200位)も取得し、TOP5判定の順位補正に使う。
+    if (tag === EVENING) {
+      bestsellerRanks = await fetchComicBestsellerRanks(context);
+      console.log(`[daily] 公開ランキング ${bestsellerRanks.size} 件を取得(順位補正用)`);
     }
   } finally {
     await browser.close();
@@ -112,6 +124,16 @@ async function main() {
     } else {
       console.log('[daily] 朝のスナップショットが無いため比較はスキップ');
     }
+
+    // 本日発売の新刊TOP5(巻1〜10)のX投稿ドラフトを生成 → docs/xtop5.json
+    const top5 = buildXTop5(records, date, bestsellerRanks);
+    mkdirSync(DOCS_DIR, { recursive: true });
+    writeFileSync(
+      join(DOCS_DIR, 'xtop5.json'),
+      JSON.stringify({ date, generatedAt: new Date().toISOString(), top5 }),
+      'utf8'
+    );
+    console.log(`[daily] X投稿ドラフト(TOP5)を出力: docs/xtop5.json (${top5.length}件)`);
   }
 
   // GitHub Pages 用ダイジェスト(docs/data.json)を全スナップショットから再生成

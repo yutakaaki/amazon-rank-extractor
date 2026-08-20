@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本日のTOP5 X投稿ドラフト</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 16px; max-width: 720px; margin: 0 auto; line-height: 1.5; }
+  h1 { font-size: 1.2rem; }
+  .muted { opacity: .65; font-size: 13px; }
+  .note { background: rgba(127,127,127,.12); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin: 10px 0; }
+  .card { border: 1px solid rgba(127,127,127,.3); border-radius: 12px; padding: 14px; margin: 14px 0; }
+  .rank { font-weight: 700; font-size: 1.05rem; }
+  .badge { display:inline-block; background:#2563eb; color:#fff; border-radius:6px; padding:1px 8px; font-size:12px; margin-left:6px; }
+  .warn { background:#f59e0b; }
+  textarea { width: 100%; box-sizing: border-box; font-size: 15px; padding: 8px; border-radius: 8px; border: 1px solid #999; min-height: 108px; }
+  input[type=text] { width: 100%; box-sizing: border-box; font-size: 15px; padding: 8px; border-radius: 8px; border: 1px solid #999; margin-top: 6px; }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  a.btn, button.btn { font-size: 14px; padding: 9px 12px; border-radius: 9px; border: 0; cursor: pointer; text-decoration: none; display: inline-block; }
+  .btn.primary { background: #2563eb; color: #fff; }
+  .btn.sec { background: #475569; color: #fff; }
+  .btn.ghost { background: rgba(127,127,127,.18); color: inherit; }
+  .amz { font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>📣 本日のTOP5 X投稿ドラフト</h1>
+<p class="muted" id="head"></p>
+<div class="note">
+  投稿手順：<b>⑤→①の順</b>に連続投稿します（タイムラインで①が上に来る）。<br>
+  各カードで「発売告知を検索」→公式/連載媒体（無ければ作者）の告知ポストURLを貼り →「引用して投稿」。<br>
+  告知が見つからない順位は<b>保留</b>してご自身で判断してください（無理に引用しない）。
+</div>
+<div id="list"></div>
+
+<script>
+const enc = encodeURIComponent;
+async function load(){
+  let data;
+  try { data = await (await fetch('./xtop5.json?_='+Date.now())).json(); }
+  catch(e){ document.getElementById('head').textContent = 'ドラフトがまだありません（夕方の実行後に生成されます）。'; return; }
+  document.getElementById('head').textContent =
+    `${data.date} 時点 / ${data.top5.length}件 ・ 生成 ${new Date(data.generatedAt).toLocaleString('ja-JP')}`;
+  // ⑤→① の順に並べる（投稿順）
+  const order = [...data.top5].reverse();
+  document.getElementById('list').innerHTML = order.map(cardHtml).join('');
+  order.forEach(t => bind(t));
+}
+function cardHtml(t){
+  const warn = t.要巻数確認 ? '<span class="badge warn">巻数要確認</span>' : '';
+  return `<div class="card" id="card-${t.位}">
+    <div class="rank">${t.丸数字} <span class="muted">コミック ${t.順位}位 ・ ${t.巻数!=null?('第'+t.巻数+'巻'):'巻数不明'}</span> ${warn}</div>
+    <div class="amz muted">${escapeHtml(t.タイトル)}<br>
+      <a href="${t.amazonUrl}" target="_blank" rel="noopener">Amazon作品ページ</a></div>
+    <textarea id="txt-${t.位}">${escapeHtml(t.投稿文)}</textarea>
+    <input type="text" id="url-${t.位}" placeholder="公式/作者の発売告知ポストURL（任意・引用したい時だけ）">
+    <div class="btns">
+      <a class="btn sec" href="${t.検索URL}" target="_blank" rel="noopener">🔎 発売告知を検索</a>
+      <button class="btn primary" data-act="quote" data-i="${t.位}">引用して投稿</button>
+      <button class="btn ghost" data-act="plain" data-i="${t.位}">引用なしで投稿</button>
+      <button class="btn ghost" data-act="copy" data-i="${t.位}">本文コピー</button>
+    </div>
+  </div>`;
+}
+function bind(t){
+  document.querySelectorAll(`#card-${t.位} button`).forEach(b=>{
+    b.onclick = () => {
+      const text = document.getElementById('txt-'+t.位).value;
+      const url = (document.getElementById('url-'+t.位).value||'').trim();
+      const act = b.dataset.act;
+      if(act==='copy'){ navigator.clipboard.writeText(text); b.textContent='コピー済'; setTimeout(()=>b.textContent='本文コピー',1200); return; }
+      if(act==='quote'){
+        if(!url){ alert('引用したい告知ポストのURLを貼ってください（無ければ「引用なしで投稿」）'); return; }
+        window.open('https://twitter.com/intent/tweet?text='+enc(text)+'&url='+enc(url), '_blank');
+      } else {
+        window.open('https://twitter.com/intent/tweet?text='+enc(text), '_blank');
+      }
+    };
+  });
+}
+function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+load();
+</script>
+</body>
+</html>

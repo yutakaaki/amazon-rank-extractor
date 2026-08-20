@@ -55,6 +55,56 @@ export async function collectFromSearch(context, searchBase, startPage, endPage)
   return [...found.keys()].map((asin) => `https://www.amazon.co.jp/dp/${asin}`);
 }
 
+// 公開コミック売れ筋ランキング(1〜200位)から asin -> 順位 のMapを作る。
+// 本日発売リストで順位が「—」になった本(商品ページで順位を読めなかった本)を、
+// 公開ランキング側の正確な順位で補正するために使う。TOP5判定の精度向上用。
+export async function fetchComicBestsellerRanks(context, { maxPages = 4 } = {}) {
+  const base = 'https://www.amazon.co.jp/gp/bestsellers/books/2278488051';
+  const map = new Map(); // asin -> rank
+  const page = await context.newPage();
+  try {
+    for (let pg = 1; pg <= maxPages; pg++) {
+      const url = pg === 1 ? base : `${base}?pg=${pg}`;
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded' });
+        await page
+          .waitForSelector('.zg-bdg-text', { timeout: 8000 })
+          .catch(() => {});
+        await page.evaluate(async () => {
+          const step = 600;
+          for (let y = 0; y < document.body.scrollHeight; y += step) {
+            window.scrollTo(0, y);
+            await new Promise((r) => setTimeout(r, 120));
+          }
+        });
+        await sleep(500);
+        const pairs = await page.$$eval(
+          'div[id^=gridItemRoot], div.zg-grid-general-faceout',
+          (els) =>
+            els.map((e) => {
+              const badge = (e.querySelector('.zg-bdg-text') || {}).textContent || '';
+              const a = e.querySelector('a[href*="/dp/"]');
+              const asin = a
+                ? (a.getAttribute('href').match(/\/dp\/([A-Z0-9]{10})/) || [])[1]
+                : null;
+              return { badge, asin };
+            })
+        );
+        for (const { badge, asin } of pairs) {
+          const m = String(badge).match(/#?(\d+)/);
+          if (asin && m && !map.has(asin)) map.set(asin, parseInt(m[1], 10));
+        }
+      } catch (e) {
+        console.warn(`[warn] 公開ランキング取得失敗 pg=${pg}: ${e.message}`);
+      }
+      await sleep(DELAY_MS);
+    }
+  } finally {
+    await page.close();
+  }
+  return map;
+}
+
 // ── 発売日モード ─────────────────────────────────────────
 // 検索を「発売日が新しい順」に並べると、未来の予約本→当日→過去 の順に並ぶ。
 // 目的日付のページまで二分探索で一気に飛び、その前後を走査して候補を集める。
