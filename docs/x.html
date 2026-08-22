@@ -136,11 +136,12 @@ function cardHtml({it,no,idx}){
     <input type="text" id="url-${idx}" placeholder="引用する告知ポストURL（上の候補から選ぶか貼り付け）">
     <div class="btns">
       <a class="btn sec" href="${it.検索URL}" target="_blank" rel="noopener">🔎 発売告知を検索</a>
-      <button class="btn primary" data-act="quote" data-i="${idx}">引用して投稿</button>
-      <button class="btn ghost" data-act="plain" data-i="${idx}">引用なしで投稿</button>
+      <a class="btn primary" id="q-${idx}" target="_blank" rel="noopener">引用して投稿画面を開く</a>
+      <a class="btn ghost" id="p-${idx}" target="_blank" rel="noopener">引用なしで開く</a>
       <button class="btn ghost" data-act="copy" data-i="${idx}">本文コピー</button>
       <button class="btn danger" data-act="remove" data-i="${idx}" data-asin="${escapeHtml(it.asin)}">この作品を外す</button>
     </div>
+    <div class="muted" style="margin-top:6px">開かない場合は「本文コピー」→ Xで貼り付けてください。</div>
   </div>`;
 }
 
@@ -173,28 +174,46 @@ function candidatesHtml(it, idx){
     }).join('')}</div>`;
 }
 
+// 投稿画面のリンクを最新の本文/引用URLに同期する。
+// iOSでは window.open がブロック/即閉じされることがあるため、通常のリンク遷移にしている。
+// エンドポイントは現行の x.com/intent/post を使用(旧 twitter.com/intent/tweet はアプリが弾くことがある)。
+function updateLinks(idx){
+  const text=(document.getElementById('txt-'+idx)||{}).value||'';
+  const url=((document.getElementById('url-'+idx)||{}).value||'').trim();
+  const q=document.getElementById('q-'+idx), p=document.getElementById('p-'+idx);
+  if(p) p.href='https://x.com/intent/post?text='+enc(text);
+  if(q){
+    // 引用は本文末尾にポストURLを付ける形(Xが引用として表示する)
+    q.href='https://x.com/intent/post?text='+enc(text)+(url?'&url='+enc(url):'');
+    q.style.opacity = url? '1':'.5';
+    q.title = url? '' : '引用元URLを選ぶと有効になります';
+  }
+}
+
 function bind({idx}){
   document.querySelectorAll(`#card-${idx} button.pick`).forEach(b=>{
     b.onclick=()=>{
       document.getElementById('url-'+idx).value=b.dataset.url;
       document.querySelectorAll(`#card-${idx} .cand`).forEach(c=>c.classList.remove('sel'));
       b.closest('.cand').classList.add('sel');
+      updateLinks(idx);
     };
   });
+  const txt=document.getElementById('txt-'+idx), urlIn=document.getElementById('url-'+idx);
+  if(txt) txt.addEventListener('input',()=>updateLinks(idx));
+  if(urlIn) urlIn.addEventListener('input',()=>updateLinks(idx));
+  updateLinks(idx);
+
   document.querySelectorAll(`#card-${idx} button:not(.pick)`).forEach(b=>{
     b.onclick=()=>{
       const act=b.dataset.act;
       if(act==='remove'){
         SEL = SEL.filter(a=>a!==b.dataset.asin); save(); render(); return;
       }
-      const text=document.getElementById('txt-'+idx).value;
-      const url=(document.getElementById('url-'+idx).value||'').trim();
-      if(act==='copy'){ navigator.clipboard.writeText(text); b.textContent='コピー済'; setTimeout(()=>b.textContent='本文コピー',1200); return; }
-      if(act==='quote'){
-        if(!url){ alert('引用したい告知ポストのURLを選ぶか貼り付けてください（無ければ「引用なしで投稿」）'); return; }
-        window.open('https://twitter.com/intent/tweet?text='+enc(text)+'&url='+enc(url),'_blank');
-      } else if(act==='plain'){
-        window.open('https://twitter.com/intent/tweet?text='+enc(text),'_blank');
+      if(act==='copy'){
+        const text=document.getElementById('txt-'+idx).value;
+        navigator.clipboard.writeText(text);
+        b.textContent='コピー済'; setTimeout(()=>b.textContent='本文コピー',1200);
       }
     };
   });
