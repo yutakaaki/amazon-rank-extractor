@@ -22,6 +22,7 @@ import {
   fetchComicBestsellerRanks,
 } from './scraper.js';
 import { buildXTop5, buildPool } from './xdraft.js';
+import { extractVolume } from './parse.js';
 import { searchForItems } from './xsearch.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -82,10 +83,13 @@ async function main() {
       const data = await scrapeProduct(context, c.url, GENRES[GENRE].label, {
         requireRank: false,
       });
+      // 商品ページの取得に失敗しても、検索カードのタイトルから巻数を復元する。
+      // (巻数不明のまま残すと、11巻以上でもTOP5に紛れ込むため)
+      const title = (data && data.title) || c.title;
       records.push({
         asin,
-        title: (data && data.title) || c.title,
-        volume: (data && data.volume) ?? null,
+        title,
+        volume: (data && data.volume) ?? extractVolume(title),
         rank: data && data.genreRank != null ? data.genreRank : null,
         date,
       });
