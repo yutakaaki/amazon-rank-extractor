@@ -61,9 +61,38 @@ function writeCsv(path, headers, rows) {
   writeFileSync(path, '﻿' + lines.join('\n'), 'utf8');
 }
 
+// スリープ起床直後はWi-Fiの再接続が終わっておらず、すぐ実行すると
+// net::ERR_INTERNET_DISCONNECTED で全滅する。接続が回復するまで待つ。
+async function waitForNetwork({ maxWaitMs = 10 * 60 * 1000 } = {}) {
+  const deadline = Date.now() + maxWaitMs;
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt++;
+    try {
+      const ctl = AbortSignal.timeout(8000);
+      const res = await fetch('https://www.amazon.co.jp/robots.txt', {
+        method: 'HEAD',
+        signal: ctl,
+      });
+      if (res.ok || res.status < 500) {
+        if (attempt > 1) console.log(`[daily] ネットワーク接続を確認(${attempt}回目)`);
+        return true;
+      }
+    } catch {
+      /* まだ繋がっていない */
+    }
+    if (attempt === 1) console.log('[daily] ネットワーク未接続。接続を待機します...');
+    await new Promise((r) => setTimeout(r, 10000));
+  }
+  console.warn('[daily] ネットワークが回復しませんでした(そのまま続行します)');
+  return false;
+}
+
 async function main() {
   mkdirSync(SNAP_DIR, { recursive: true });
   mkdirSync(RESULTS_DIR, { recursive: true });
+
+  await waitForNetwork();
 
   const date = todayStr();
   const stamp = date.replaceAll('-', '');
@@ -104,6 +133,16 @@ async function main() {
     }
   } finally {
     await browser.close();
+  }
+
+  // 0件は通信障害などの取得失敗がほぼ確実。
+  // 空のスナップショットを保存すると比較データを壊すため、保存せず終了する。
+  if (records.length === 0) {
+    console.error(
+      `[daily] 取得0件のため保存を中止しました(通信障害の可能性)。既存データは保持されます。`
+    );
+    process.exitCode = 1;
+    return;
   }
 
   // スナップショット(突き合わせ用)
