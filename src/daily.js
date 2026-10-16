@@ -63,7 +63,9 @@ function writeCsv(path, headers, rows) {
 
 // スリープ起床直後はWi-Fiの再接続が終わっておらず、すぐ実行すると
 // net::ERR_INTERNET_DISCONNECTED で全滅する。接続が回復するまで待つ。
-async function waitForNetwork({ maxWaitMs = 10 * 60 * 1000 } = {}) {
+// フタを閉じたまま起床した場合はWi-Fiが戻らないことがあるため、
+// 長めに待つ(PCを開いた時点で接続が戻り、そこから実行が始まる)。
+async function waitForNetwork({ maxWaitMs = 60 * 60 * 1000 } = {}) {
   const deadline = Date.now() + maxWaitMs;
   let attempt = 0;
   while (Date.now() < deadline) {
