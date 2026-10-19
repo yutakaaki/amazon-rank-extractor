@@ -1,8 +1,11 @@
 name: 本日発売コミック抽出
 
 on:
-  # 定期実行は信頼性の高い「自宅Mac(launchd)」が担う。
-  # GitHub側のcronは遅延/スキップが多いため使わず、手動トリガーのみ残す(クラウド予備)。
+  # 定時のデータ取得はクラウドが担当する(Macは6:00/18:00に閉じていることが多いため)。
+  # cronはUTC。毎時0分は混雑して遅延/スキップされやすいので少しずらす。
+  schedule:
+    - cron: '12 21 * * *' # 06:12 JST 付近
+    - cron: '12 9 * * *' # 18:12 JST 付近
   workflow_dispatch:
     inputs:
       tag:
@@ -38,11 +41,12 @@ jobs:
       - name: 抽出実行
         run: node src/daily.js ${{ github.event.inputs.tag }}
 
-      - name: 結果をコミット
+      # 通常は daily.js 側が push 済み。失敗した場合の保険として残す。
+      - name: 結果をコミット(保険)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add results snapshots
+          git add results snapshots docs
           if git diff --cached --quiet; then
             echo "変更なし"
           else

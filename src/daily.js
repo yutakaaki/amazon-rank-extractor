@@ -99,6 +99,28 @@ async function main() {
   const date = todayStr();
   const stamp = date.replaceAll('-', '');
   const tag = resolveTag();
+
+  // すでにその回のデータがある場合(クラウドが定時に取得済みなど)は再取得しない。
+  // Macを開いた時刻の順位で上書きすると、6:00/18:00時点の数値が失われるため。
+  // この場合はX告知候補の補完だけ行う(--force で強制的に再取得)。
+  const snapPath = join(SNAP_DIR, `${GENRE}_${stamp}_${tag}.json`);
+  const force = process.argv.includes('--force');
+  if (!force && existsSync(snapPath)) {
+    let existing = null;
+    try {
+      existing = JSON.parse(readFileSync(snapPath, 'utf8'));
+    } catch {
+      /* 壊れていれば通常取得へ */
+    }
+    if (existing && Array.isArray(existing.records) && existing.records.length) {
+      console.log(
+        `[daily] ${date} ${tag} は取得済み(${existing.records.length}件)。再取得せずX告知候補の補完のみ行います。`
+      );
+      await enrichOnly(existing.records, date, stamp, tag);
+      return;
+    }
+  }
+
   console.log(`[daily] ${date} ${tag} ${GENRE} の抽出を開始`);
 
   const { browser, context } = await createBrowser({ headless: true });
@@ -148,7 +170,6 @@ async function main() {
   }
 
   // スナップショット(突き合わせ用)
-  const snapPath = join(SNAP_DIR, `${GENRE}_${stamp}_${tag}.json`);
   writeFileSync(snapPath, JSON.stringify({ genre: GENRE, date, tag, records }, null, 2), 'utf8');
 
   // その回の一覧CSV(順位順、圏外は末尾)
@@ -229,6 +250,73 @@ async function main() {
 
   // 翌回の自動起床を再設定(任意・失敗しても致命的ではない)
   rearmWake(tag);
+}
+
+// 取得済みデータに対して、X告知候補の補完だけを行う。
+// クラウドが定時に取得したデータを、Macを開いた時に「順位はそのまま」で補強するための経路。
+async function enrichOnly(records, date, stamp, tag) {
+  // 夕の回以外はX候補を作らないので、ダイジェストだけ更新して終わる。
+  if (tag !== EVENING) {
+    buildDigest();
+    pushResults(`${date} ${tag} ダイジェスト更新`);
+    return;
+  }
+
+  const top5 = buildXTop5(records, date);
+  const pool = buildPool(records, date, new Map(), 20);
+
+  // 既存の候補ポストを読み込む(検索できなかった場合に消さないため)
+  const xPath = join(DOCS_DIR, 'xtop5.json');
+  let prev = {};
+  if (existsSync(xPath)) {
+    try {
+      prev = JSON.parse(readFileSync(xPath, 'utf8'));
+    } catch {
+      /* 壊れていれば無視 */
+    }
+  }
+  const postsByAsin = { ...(prev.date === date ? prev.postsByAsin || {} : {}) };
+  let loginRequired = false;
+
+  const targets = pool.slice(0, 10).filter((t) => !(postsByAsin[t.asin] || []).length);
+  if (targets.length) {
+    try {
+      const found = await searchForItems(
+        targets.map((t) => ({ asin: t.asin, title: t.タイトル, volume: t.巻数 })),
+        { max: 5 }
+      );
+      for (const f of found) {
+        if (f.loginRequired) loginRequired = true;
+        else if ((f.candidates || []).length) postsByAsin[f.asin] = f.candidates;
+      }
+      const total = Object.values(postsByAsin).reduce((n, a) => n + a.length, 0);
+      console.log(
+        `[daily] 告知候補を補完: 合計 ${total} 件` + (loginRequired ? ' (※Xの再ログインが必要)' : '')
+      );
+    } catch (e) {
+      console.warn('[daily] X検索に失敗(既存の候補は維持): ' + (e.message || e));
+    }
+  } else {
+    console.log('[daily] 補完が必要な作品はありません');
+  }
+
+  mkdirSync(DOCS_DIR, { recursive: true });
+  writeFileSync(
+    xPath,
+    JSON.stringify({
+      date,
+      generatedAt: new Date().toISOString(),
+      top5,
+      pool,
+      postsByAsin,
+      loginRequired,
+    }),
+    'utf8'
+  );
+  console.log(`[daily] X投稿ドラフトを更新: docs/xtop5.json (TOP5=${top5.length})`);
+
+  buildDigest();
+  pushResults(`${date} ${tag} 告知候補を補完`);
 }
 
 // 朝→夕のランク変化を比較する純粋関数。ランクが両方とれた書籍のみ対象。
