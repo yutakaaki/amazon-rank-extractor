@@ -33,6 +33,10 @@ const DOCS_DIR = join(ROOT, 'docs'); // GitHub Pages 公開用
 
 const DIGEST_DAYS = 30; // ダイジェストに残す日数
 
+// 取りこぼし救済: 公開ランキングの何位までを確認対象にするか / 1回の上限件数
+const RECOVERY_MAX_RANK = 60;
+const RECOVERY_LIMIT = 40;
+
 const GENRE = 'コミック'; // 自動実行の対象ジャンル
 const MORNING = '0600';
 const EVENING = '1800';
@@ -150,10 +154,42 @@ async function main() {
         `  [${i}/${candidates.length}] ${records.at(-1).rank ?? '—'} ${records.at(-1).title.slice(0, 26)}\n`
       );
     }
-    // 夕の回は公開コミックランキング(1〜200位)も取得し、TOP5判定の順位補正に使う。
-    if (tag === EVENING) {
-      bestsellerRanks = await fetchComicBestsellerRanks(context);
-      console.log(`[daily] 公開ランキング ${bestsellerRanks.size} 件を取得(順位補正用)`);
+    // 公開コミックランキングを取得(順位補正 + 取りこぼし救済に使う)。
+    bestsellerRanks = await fetchComicBestsellerRanks(context);
+    console.log(`[daily] 公開ランキング ${bestsellerRanks.size} 件を取得`);
+
+    // ── 取りこぼし救済 ──
+    // 発売日順検索はカテゴリ絞り込みの都合で一部の新刊を拾えないことがある
+    // (例: 日本文芸社の作品が「コミック」検索に出てこない)。
+    // 上位は取りこぼすと影響が大きいので、公開ランキング上位のうち未取得のものは
+    // 商品ページを開いて発売日を確認し、本日発売なら records に加える。
+    const known = new Set(records.map((r) => r.asin).filter(Boolean));
+    const missing = [...bestsellerRanks.entries()]
+      .filter(([asin, rank]) => rank <= RECOVERY_MAX_RANK && !known.has(asin))
+      .sort((a, b) => a[1] - b[1])
+      .slice(0, RECOVERY_LIMIT);
+    if (missing.length) {
+      console.log(`[daily] 公開ランキング上位の未取得 ${missing.length} 件を確認します`);
+      let recovered = 0;
+      for (const [asin, rank] of missing) {
+        const data = await scrapeProduct(
+          context,
+          `https://www.amazon.co.jp/dp/${asin}`,
+          GENRES[GENRE].label,
+          { requireRank: false }
+        );
+        if (!data || data.releaseDate !== date) continue;
+        records.push({
+          asin,
+          title: data.title,
+          volume: data.volume ?? extractVolume(data.title),
+          rank: data.genreRank ?? rank,
+          date,
+        });
+        recovered++;
+        console.log(`  ＋救済 ${data.genreRank ?? rank}位 ${data.title.slice(0, 30)}`);
+      }
+      console.log(`[daily] 救済した本日発売: ${recovered} 件`);
     }
   } finally {
     await browser.close();

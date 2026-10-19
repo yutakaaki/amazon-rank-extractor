@@ -44,6 +44,10 @@
   .prow .t { flex:1; }
   .prow .btn { padding:6px 12px; font-size:13px; }
   .edited { background:#7c3aed; }
+  .manual { background:#0891b2; }
+  .row2 { display:flex; gap:10px; margin-top:8px; }
+  .row2 > div { flex:1; }
+  label.muted { display:block; margin-top:8px; }
 </style>
 </head>
 <body>
@@ -61,6 +65,27 @@
 <div class="muted" id="poolnote"></div>
 <div class="pool" id="poolList"></div>
 
+<h2>作品を手動で追加</h2>
+<div class="muted">
+  Amazonのカテゴリ登録の都合で、検索に出てこない作品がまれにあります。
+  その場合はここから追加してください（作品ページのタイトルをそのままコピペ）。
+</div>
+<div class="card">
+  <label class="muted">タイトル（必須・Amazon作品ページからコピペ）</label>
+  <input type="text" id="mTitle" placeholder="例: 異世界クラス召喚されたら… ( 6) (マンガBANGコミックス)">
+  <div class="row2">
+    <div>
+      <label class="muted">コミック順位（任意）</label>
+      <input type="text" id="mRank" inputmode="numeric" placeholder="例: 42">
+    </div>
+    <div>
+      <label class="muted">AmazonのURL（任意）</label>
+      <input type="text" id="mUrl" placeholder="https://www.amazon.co.jp/dp/...">
+    </div>
+  </div>
+  <div class="btns"><button class="btn primary" id="mAdd">候補に追加</button></div>
+</div>
+
 <script>
 const enc = encodeURIComponent;
 const CIRCLED = ['①','②','③','④','⑤'];
@@ -70,24 +95,36 @@ function storeKey(){ return 'xtop5:' + (DATA?DATA.date:''); }
 function save(){ try{ localStorage.setItem(storeKey(), JSON.stringify(SEL)); }catch(e){} }
 function load(){ try{ const v=localStorage.getItem(storeKey()); return v?JSON.parse(v):null; }catch(e){ return null; } }
 
+// 手動で追加した作品(検索に出てこないものの救済)。日付ごとにブラウザへ保存する。
+let MANUAL = [];
+function manualKey(){ return 'xtop5-manual:' + (DATA?DATA.date:''); }
+function saveManual(){ try{ localStorage.setItem(manualKey(), JSON.stringify(MANUAL)); }catch(e){} }
+function loadManual(){ try{ const v=localStorage.getItem(manualKey()); return v?JSON.parse(v):[]; }catch(e){ return []; } }
+// 候補の全体 = 自動取得ぶん + 手動追加ぶん
+function allItems(){ return [...(DATA.pool||[]), ...MANUAL]; }
+
 function jpDate(d){ const m=String(d).match(/(\d{4})-(\d{2})-(\d{2})/); return m? `${m[1]}年${+m[2]}月${+m[3]}日` : d; }
 function tweetText(circled, title){ return `【${jpDate(DATA.date)}時点】\n📚今売れている注目の新刊コミック${circled}\n\n${title}`; }
-function itemOf(asin){ return (DATA.pool||[]).find(p=>p.asin===asin); }
+function itemOf(asin){ return allItems().find(p=>p.asin===asin); }
 function postsOf(asin){ return (DATA.postsByAsin||{})[asin] || []; }
 
 async function boot(){
   try { DATA = await (await fetch('./xtop5.json?_='+Date.now())).json(); }
   catch(e){ document.getElementById('head').textContent='ドラフトがまだありません（夕方の実行後に生成されます）。'; return; }
+  MANUAL = loadManual();
   const auto = (DATA.top5||[]).map(t=>t.asin);
   const saved = load();
   SEL = (saved && saved.length) ? saved.filter(a=>itemOf(a)) : auto;
+  bindManualForm();
   document.getElementById('head').textContent =
     `${DATA.date} 時点 ・ 生成 ${new Date(DATA.generatedAt).toLocaleString('ja-JP')}`;
   render();
 }
 
 function selectedSorted(){
-  return SEL.map(itemOf).filter(Boolean).sort((a,b)=>a.順位-b.順位);
+  // 順位未入力(手動追加)は末尾に置く
+  const r = (x)=> (x.順位==null || !Number.isFinite(x.順位)) ? Infinity : x.順位;
+  return SEL.map(itemOf).filter(Boolean).sort((a,b)=>r(a)-r(b));
 }
 function isEdited(){
   const auto=(DATA.top5||[]).map(t=>t.asin).join(',');
@@ -104,18 +141,23 @@ function render(){
   withNo.forEach(w=>bind(w));
 
   // 候補一覧
-  const rest = (DATA.pool||[]).filter(p=>!SEL.includes(p.asin));
+  const rest = allItems().filter(p=>!SEL.includes(p.asin));
   const full = SEL.length>=5;
   document.getElementById('poolnote').textContent =
     `選択中 ${SEL.length}/5 件${full?'（5件に達しています。差し替えるには先に外してください）':''}`;
   document.getElementById('poolList').innerHTML = rest.map(p=>`
     <div class="prow">
-      <span class="r">${p.順位}位</span>
-      <span class="t">${escapeHtml(p.タイトル)} ${p.巻数!=null?`<span class="muted">第${p.巻数}巻</span>`:'<span class="badge warn">巻数要確認</span>'}</span>
+      <span class="r">${p.順位!=null?p.順位+'位':'—'}</span>
+      <span class="t">${escapeHtml(p.タイトル)} ${p.巻数!=null?`<span class="muted">第${p.巻数}巻</span>`:''}
+        ${p.手動?'<span class="badge manual">手動追加</span>':''}</span>
       <button class="btn ${full?'ghost':'primary'} add" data-asin="${escapeHtml(p.asin)}" ${full?'disabled':''}>追加</button>
+      ${p.手動?`<button class="btn danger del" data-asin="${escapeHtml(p.asin)}">削除</button>`:''}
     </div>`).join('') || '<div class="muted" style="padding:10px 0">他の候補はありません。</div>';
   document.querySelectorAll('.add').forEach(b=>{
     b.onclick=()=>{ if(SEL.length>=5) return; SEL.push(b.dataset.asin); save(); render(); window.scrollTo({top:0,behavior:'smooth'}); };
+  });
+  document.querySelectorAll('.del').forEach(b=>{
+    b.onclick=()=>{ MANUAL=MANUAL.filter(m=>m.asin!==b.dataset.asin); saveManual(); render(); };
   });
 
   document.getElementById('reset').innerHTML = isEdited()
@@ -128,9 +170,8 @@ function cardHtml({it,no,idx}){
   const warn = it.要巻数確認 ? '<span class="badge warn">巻数要確認</span>' : '';
   const edited = isEdited() ? '<span class="badge edited">手動選出</span>' : '';
   return `<div class="card" id="card-${idx}">
-    <div class="rank">${no} <span class="muted">コミック ${it.順位}位 ・ ${it.巻数!=null?('第'+it.巻数+'巻'):'巻数不明'}</span> ${warn} ${edited}</div>
-    <div class="amz muted">${escapeHtml(it.タイトル)}<br>
-      <a href="${it.amazonUrl}" target="_blank" rel="noopener">Amazon作品ページ</a></div>
+    <div class="rank">${no} <span class="muted">${it.順位!=null?('コミック '+it.順位+'位'):'順位未設定'} ・ ${it.巻数!=null?('第'+it.巻数+'巻'):'巻数不明'}</span> ${warn} ${edited} ${it.手動?'<span class="badge manual">手動追加</span>':''}</div>
+    <div class="amz muted">${escapeHtml(it.タイトル)}${it.amazonUrl?'<br><a href="'+escapeHtml(it.amazonUrl)+'" target="_blank" rel="noopener">Amazon作品ページ</a>':''}</div>
     <textarea id="txt-${idx}">${escapeHtml(tweetText(no, it.タイトル))}</textarea>
     ${candidatesHtml(it, idx)}
     <input type="text" id="url-${idx}" placeholder="引用する告知ポストURL（上の候補から選ぶか貼り付け）">
@@ -218,6 +259,44 @@ function bind({idx}){
     };
   });
 }
+// タイトルから巻数を推定(サーバ側と同じ考え方の簡易版)
+function guessVolume(title){
+  const t=(title||'').replace(/　/g,' ');
+  const pats=[/[第\s]?\s*([0-9０-９]{1,4})\s*巻/, /[（(]\s*([0-9０-９]{1,4})\s*[）)]/,
+              /(?:^|[^0-9０-９])([0-9０-９]{1,4})\s*[【\[]/, /(?:^|[^0-9０-９])([0-9０-９]{1,4})\s*$/];
+  for(const p of pats){ const m=t.match(p); if(m){
+    const n=parseInt(m[1].replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xfee0)),10);
+    if(Number.isFinite(n)) return n; } }
+  return null;
+}
+
+function bindManualForm(){
+  const btn=document.getElementById('mAdd'); if(!btn) return;
+  btn.onclick=()=>{
+    const title=(document.getElementById('mTitle').value||'').trim();
+    if(!title){ alert('タイトルを入力してください（Amazon作品ページからコピペ）'); return; }
+    const rankRaw=(document.getElementById('mRank').value||'').trim();
+    const rank=rankRaw? parseInt(rankRaw.replace(/[^0-9]/g,''),10) : null;
+    const url=(document.getElementById('mUrl').value||'').trim();
+    const asinM=url.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/);
+    const asin = asinM? asinM[1] : 'manual-'+Date.now();
+    if(itemOf(asin)){ alert('この作品はすでに候補にあります。'); return; }
+    MANUAL.push({
+      asin, タイトル:title, 巻数:guessVolume(title),
+      順位: Number.isFinite(rank)? rank : null,
+      amazonUrl: asinM? `https://www.amazon.co.jp/dp/${asinM[1]}` : (url||null),
+      手動: true,
+      検索URL:'https://twitter.com/search?q='+enc(title+' 発売')+'&f=live',
+    });
+    saveManual();
+    document.getElementById('mTitle').value='';
+    document.getElementById('mRank').value='';
+    document.getElementById('mUrl').value='';
+    render();
+    alert('候補に追加しました。下の一覧から「追加」でTOP5に入れられます。');
+  };
+}
+
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 boot();
 </script>
