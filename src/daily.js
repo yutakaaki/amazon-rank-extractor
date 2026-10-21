@@ -99,6 +99,7 @@ async function main() {
   mkdirSync(RESULTS_DIR, { recursive: true });
 
   await waitForNetwork();
+  syncFromRemote();
 
   const date = todayStr();
   const stamp = date.replaceAll('-', '');
@@ -449,6 +450,21 @@ export function buildDigest() {
   console.log(`[daily] ダイジェスト更新: docs/data.json (${days.length}日分)`);
 }
 
+// 実行前にリモートの最新を取り込む。
+// クラウドが先に取得していれば、それを見て「補完のみ」に分岐でき、
+// 同じファイルを二重に作って競合することを防げる。
+function syncFromRemote() {
+  try {
+    const git = (args) => execFileSync('git', args, { cwd: ROOT, stdio: 'pipe' });
+    git(['fetch', 'origin', 'main']);
+    // ローカルに未コミットの生成物があると rebase できないので、競合しない時だけ取り込む
+    git(['merge', '--ff-only', 'origin/main']);
+    console.log('[daily] リモートの最新を取り込みました');
+  } catch {
+    // 取り込めなくても処理は継続(初回/ローカル変更ありなど)
+  }
+}
+
 // results / snapshots / docs を GitHub に push。
 // git 未設定・リモート無し・認証失敗でもエラーで止めない(ローカル運用は継続)。
 function pushResults(message) {
@@ -463,11 +479,33 @@ function pushResults(message) {
       // 差分あり → commit
     }
     git(['-c', 'user.name=amazon-rank-bot', '-c', 'user.email=bot@local', 'commit', '-m', `auto: ${message}`]);
+
+    // クラウドとMacが同じファイルを書くため rebase が競合しうる。
+    // 競合したまま push すると衝突マーカーがJSONに混入して壊れるので、
+    // 必ず rebase を中断し、push せずに終了する(次回の実行で解消する)。
     try {
       git(['pull', '--rebase', '--autostash', 'origin', 'main']);
-    } catch {
-      /* 競合時もpushを試みる */
+    } catch (e) {
+      try {
+        git(['rebase', '--abort']);
+      } catch {
+        /* rebase中でなければ無視 */
+      }
+      console.error(
+        '[daily] リモートと競合したため push を中止しました(データはローカルに保存済み)。'
+      );
+      return;
     }
+
+    // 念のため、衝突マーカーが混入していないか確認してから push する
+    try {
+      git(['grep', '-l', '-e', '^<<<<<<< ', '--', 'snapshots', 'docs', 'results']);
+      console.error('[daily] 衝突マーカーを検出したため push を中止しました。');
+      return;
+    } catch {
+      /* grep がヒットしない = 正常 */
+    }
+
     git(['push', 'origin', 'main']);
     console.log('[daily] GitHub へ push 完了');
     triggerPagesDeploy();
