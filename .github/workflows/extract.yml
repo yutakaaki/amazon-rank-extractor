@@ -38,8 +38,22 @@ jobs:
       - name: Chromium 準備
         run: npx playwright install --with-deps chromium
 
+      # どのcronで起動したかからタグを決める。
+      # 実行時刻から推測すると、遅延した夕方の回が「翌日の朝」と誤認されるため。
       - name: 抽出実行
-        run: node src/daily.js ${{ github.event.inputs.tag }}
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          TAG="$INPUT_TAG"
+          if [ -z "$TAG" ]; then
+            case "$SCHEDULE" in
+              "12 21 * * *") TAG=0600 ;;
+              "12 9 * * *")  TAG=1800 ;;
+            esac
+          fi
+          echo "実行タグ: ${TAG:-(時刻から自動判定)}"
+          node src/daily.js $TAG
 
       # 通常は daily.js 側が push 済み。失敗した場合の保険として残す。
       - name: 結果をコミット(保険)

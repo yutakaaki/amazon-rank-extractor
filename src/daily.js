@@ -126,6 +126,17 @@ async function main() {
     }
   }
 
+  // cronが大幅に遅延すると、深夜に「翌日の朝の回」として走ってしまい
+  // まだ1冊も登録されていない状態で空振りする。時間帯が妥当でなければ静かに終了する。
+  const hour = new Date().getHours();
+  const sane = tag === MORNING ? hour >= 4 && hour <= 11 : hour >= 16 && hour <= 23;
+  if (!sane) {
+    console.log(
+      `[daily] 実行時刻(${hour}時)が ${tag} の想定から外れているためスキップします(遅延実行)。`
+    );
+    return;
+  }
+
   console.log(`[daily] ${date} ${tag} ${GENRE} の抽出を開始`);
 
   const { browser, context } = await createBrowser({ headless: true });
@@ -199,6 +210,12 @@ async function main() {
   // 0件は通信障害などの取得失敗がほぼ確実。
   // 空のスナップショットを保存すると比較データを壊すため、保存せず終了する。
   if (records.length === 0) {
+    // 公開ランキングが取れていれば通信は正常＝本当に発売が無いだけ。
+    // この場合はエラー終了しない(失敗アラートの誤報を防ぐ)。
+    if (bestsellerRanks.size > 0) {
+      console.log('[daily] 本日発売の対象がありませんでした(通信は正常)。保存はしません。');
+      return;
+    }
     console.error(
       `[daily] 取得0件のため保存を中止しました(通信障害の可能性)。既存データは保持されます。`
     );
