@@ -48,6 +48,11 @@ function todayStr() {
 }
 
 // 実行タグ(朝/夕)を決める。引数優先、無ければ現在の時刻帯で判定。
+// タグが引数で明示指定されたか(手動実行の意思表示)
+function tagWasExplicit() {
+  return process.argv.includes(MORNING) || process.argv.includes(EVENING);
+}
+
 function resolveTag() {
   const arg = process.argv[2];
   if (arg === MORNING || arg === EVENING) return arg;
@@ -130,7 +135,8 @@ async function main() {
   // まだ1冊も登録されていない状態で空振りする。時間帯が妥当でなければ静かに終了する。
   const hour = new Date().getHours();
   const sane = tag === MORNING ? hour >= 4 && hour <= 11 : hour >= 16 && hour <= 23;
-  if (!sane) {
+  // 手動実行(タグを明示)や --force は意図的なので、時間帯に関係なく実行する
+  if (!sane && !tagWasExplicit() && !process.argv.includes('--force')) {
     console.log(
       `[daily] 実行時刻(${hour}時)が ${tag} の想定から外れているためスキップします(遅延実行)。`
     );
