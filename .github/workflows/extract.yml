@@ -10,6 +10,10 @@ on:
         description: '0600 か 1800 (空なら実行時刻から自動判定)'
         required: false
         default: ''
+      debug:
+        description: 'true にすると検索ページの状態だけ調べて終了'
+        required: false
+        default: ''
   # iPad等ではGitHubのモバイル画面に「Run workflow」が出ないことがあるため、
   # Issueを立てるだけでも実行できるようにする。
   # タイトルに 0600 / 1800 を含めるとその回として実行する。
@@ -42,9 +46,15 @@ jobs:
       - name: Chromium 準備
         run: npx playwright install --with-deps chromium
 
+      # クラウドからAmazonの検索が見えているかを調べる(debug=true のときだけ)
+      - name: 検索ページの診断
+        if: github.event.inputs.debug == 'true'
+        run: node scripts/diagnose-search.mjs
+
       # どのcronで起動したかからタグを決める。
       # 実行時刻から推測すると、遅延した夕方の回が「翌日の朝」と誤認されるため。
       - name: 抽出実行
+        if: github.event.inputs.debug != 'true'
         env:
           SCHEDULE: ${{ github.event.schedule }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
