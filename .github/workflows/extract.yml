@@ -10,9 +10,15 @@ on:
         description: '0600 か 1800 (空なら実行時刻から自動判定)'
         required: false
         default: ''
+  # iPad等ではGitHubのモバイル画面に「Run workflow」が出ないことがあるため、
+  # Issueを立てるだけでも実行できるようにする。
+  # タイトルに 0600 / 1800 を含めるとその回として実行する。
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: extract
@@ -42,8 +48,16 @@ jobs:
         env:
           SCHEDULE: ${{ github.event.schedule }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
         run: |
           TAG="$INPUT_TAG"
+          # Issue起動の場合はタイトルから 0600/1800 を読む
+          if [ -z "$TAG" ] && [ -n "$ISSUE_TITLE" ]; then
+            case "$ISSUE_TITLE" in
+              *0600*) TAG=0600 ;;
+              *1800*) TAG=1800 ;;
+            esac
+          fi
           if [ -z "$TAG" ]; then
             case "$SCHEDULE" in
               "12 21 * * *") TAG=0600 ;;
@@ -66,3 +80,14 @@ jobs:
             git pull --rebase --autostash || true
             git push
           fi
+
+      # Issueから起動した場合は、完了報告してIssueを閉じる(溜まらないように)
+      - name: Issueを閉じる
+        if: always() && github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --body "実行しました（結果: ${{ job.status }}）。数分後に公開ページへ反映されます。
+          https://yutakaaki.github.io/amazon-rank-extractor/"
+          gh issue close "${{ github.event.issue.number }}"
