@@ -37,6 +37,10 @@ const DIGEST_DAYS = 30; // ダイジェストに残す日数
 const RECOVERY_MAX_RANK = 60;
 const RECOVERY_LIMIT = 40;
 
+// 取得失敗(公開ランキング0件)時のやり直し: 回数 / 待ち時間(分)
+const BLOCK_RETRIES = 3;
+const BLOCK_RETRY_WAIT_MIN = 12;
+
 const GENRE = 'コミック'; // 自動実行の対象ジャンル
 const MORNING = '0600';
 const EVENING = '1800';
@@ -99,52 +103,9 @@ async function waitForNetwork({ maxWaitMs = 60 * 60 * 1000 } = {}) {
   return false;
 }
 
-async function main() {
-  mkdirSync(SNAP_DIR, { recursive: true });
-  mkdirSync(RESULTS_DIR, { recursive: true });
-
-  await waitForNetwork();
-  syncFromRemote();
-
-  const date = todayStr();
-  const stamp = date.replaceAll('-', '');
-  const tag = resolveTag();
-
-  // すでにその回のデータがある場合(クラウドが定時に取得済みなど)は再取得しない。
-  // Macを開いた時刻の順位で上書きすると、6:00/18:00時点の数値が失われるため。
-  // この場合はX告知候補の補完だけ行う(--force で強制的に再取得)。
-  const snapPath = join(SNAP_DIR, `${GENRE}_${stamp}_${tag}.json`);
-  const force = process.argv.includes('--force');
-  if (!force && existsSync(snapPath)) {
-    let existing = null;
-    try {
-      existing = JSON.parse(readFileSync(snapPath, 'utf8'));
-    } catch {
-      /* 壊れていれば通常取得へ */
-    }
-    if (existing && Array.isArray(existing.records) && existing.records.length) {
-      console.log(
-        `[daily] ${date} ${tag} は取得済み(${existing.records.length}件)。再取得せずX告知候補の補完のみ行います。`
-      );
-      await enrichOnly(existing.records, date, stamp, tag);
-      return;
-    }
-  }
-
-  // cronが大幅に遅延すると、深夜に「翌日の朝の回」として走ってしまい
-  // まだ1冊も登録されていない状態で空振りする。時間帯が妥当でなければ静かに終了する。
-  const hour = new Date().getHours();
-  const sane = tag === MORNING ? hour >= 4 && hour <= 11 : hour >= 16 && hour <= 23;
-  // 手動実行(タグを明示)や --force は意図的なので、時間帯に関係なく実行する
-  if (!sane && !tagWasExplicit() && !process.argv.includes('--force')) {
-    console.log(
-      `[daily] 実行時刻(${hour}時)が ${tag} の想定から外れているためスキップします(遅延実行)。`
-    );
-    return;
-  }
-
-  console.log(`[daily] ${date} ${tag} ${GENRE} の抽出を開始`);
-
+// Amazonから1回ぶん取得する(本日発売の候補 + 公開ランキング + 取りこぼし救済)。
+// ランキングが0件(=Amazonが空のページを返した)なら、診断用に画面を logs/ に保存する。
+async function fetchOnce(date, stamp, tag, attempt) {
   const { browser, context } = await createBrowser({ headless: true });
   const records = [];
   let bestsellerRanks = new Map();
@@ -209,8 +170,100 @@ async function main() {
       }
       console.log(`[daily] 救済した本日発売: ${recovered} 件`);
     }
+    if (bestsellerRanks.size === 0) await saveBlockedPage(context, stamp, tag, attempt);
   } finally {
     await browser.close();
+  }
+  return { records, bestsellerRanks };
+}
+
+// 取得失敗時のAmazonの画面(ロボット確認画面など)を保存する。原因の確認用。
+async function saveBlockedPage(context, stamp, tag, attempt) {
+  try {
+    const page = await context.newPage();
+    await page.goto('https://www.amazon.co.jp/gp/bestsellers/books/2278488051', {
+      waitUntil: 'domcontentloaded',
+    });
+    const dir = join(ROOT, 'logs', 'blocked');
+    mkdirSync(dir, { recursive: true });
+    const base = join(dir, `${stamp}_${tag}_${attempt}`);
+    await page.screenshot({ path: `${base}.png`, fullPage: false });
+    writeFileSync(`${base}.html`, await page.content(), 'utf8');
+    console.log(`[daily] 取得失敗時の画面を保存: ${base}.png (タイトル: ${await page.title()})`);
+    await page.close();
+  } catch (e) {
+    console.warn('[daily] 失敗画面の保存に失敗: ' + (e.message || e));
+  }
+}
+
+async function main() {
+  mkdirSync(SNAP_DIR, { recursive: true });
+  mkdirSync(RESULTS_DIR, { recursive: true });
+
+  await waitForNetwork();
+  syncFromRemote();
+
+  const date = todayStr();
+  const stamp = date.replaceAll('-', '');
+  const tag = resolveTag();
+
+  // すでにその回のデータがある場合(クラウドが定時に取得済みなど)は再取得しない。
+  // Macを開いた時刻の順位で上書きすると、6:00/18:00時点の数値が失われるため。
+  // この場合はX告知候補の補完だけ行う(--force で強制的に再取得)。
+  const snapPath = join(SNAP_DIR, `${GENRE}_${stamp}_${tag}.json`);
+  const force = process.argv.includes('--force');
+  if (!force && existsSync(snapPath)) {
+    let existing = null;
+    try {
+      existing = JSON.parse(readFileSync(snapPath, 'utf8'));
+    } catch {
+      /* 壊れていれば通常取得へ */
+    }
+    if (existing && Array.isArray(existing.records) && existing.records.length) {
+      console.log(
+        `[daily] ${date} ${tag} は取得済み(${existing.records.length}件)。再取得せずX告知候補の補完のみ行います。`
+      );
+      await enrichOnly(existing.records, date, stamp, tag);
+      return;
+    }
+  }
+
+  // cronが大幅に遅延すると、深夜に「翌日の朝の回」として走ってしまい
+  // まだ1冊も登録されていない状態で空振りする。時間帯が妥当でなければ静かに終了する。
+  const hour = new Date().getHours();
+  const sane = tag === MORNING ? hour >= 4 && hour <= 11 : hour >= 16 && hour <= 23;
+  // 手動実行(タグを明示)や --force は意図的なので、時間帯に関係なく実行する
+  if (!sane && !tagWasExplicit() && !process.argv.includes('--force')) {
+    console.log(
+      `[daily] 実行時刻(${hour}時)が ${tag} の想定から外れているためスキップします(遅延実行)。`
+    );
+    return;
+  }
+
+  console.log(`[daily] ${date} ${tag} ${GENRE} の抽出を開始`);
+
+  // Amazonがときどき中身のないページを返す(ロボット判定とみられる。2026-11-13〜)。
+  // 公開ランキングが0件ならその回は失敗とみなし、時間をおいて取り直す。
+  // (土日など本当に発売が無い日でも、公開ランキングは取れるので区別できる)
+  let records = [];
+  let bestsellerRanks = new Map();
+  for (let attempt = 1; attempt <= 1 + BLOCK_RETRIES; attempt++) {
+    const got = await fetchOnce(date, stamp, tag, attempt);
+    // 取れた量が多い方を残す(やり直しで悪化した場合に備える)
+    if (got.records.length + got.bestsellerRanks.size >= records.length + bestsellerRanks.size) {
+      records = got.records;
+      bestsellerRanks = got.bestsellerRanks;
+    }
+    if (bestsellerRanks.size > 0) break;
+    if (attempt <= BLOCK_RETRIES) {
+      console.warn(
+        `[daily] 公開ランキングが0件(Amazonの一時的な拒否とみられる)。` +
+          `${BLOCK_RETRY_WAIT_MIN}分後にやり直します(${attempt}/${BLOCK_RETRIES})`
+      );
+      await new Promise((r) => setTimeout(r, BLOCK_RETRY_WAIT_MIN * 60 * 1000));
+    } else {
+      console.warn('[daily] やり直しても公開ランキングが取れませんでした。');
+    }
   }
 
   // 0件は通信障害などの取得失敗がほぼ確実。
